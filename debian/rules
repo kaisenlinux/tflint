@@ -1,0 +1,22 @@
+#!/usr/bin/make -f
+
+export GOPATH=$(CURDIR)/_build
+export GO111MODULE=on
+
+%:
+	dh $@ --buildsystem=golang
+
+override_dh_auto_clean:
+	make clean
+
+override_dh_auto_configure:
+
+override_dh_auto_build:
+	make build
+
+override_dh_auto_test:
+
+override_dh_auto_install:
+	install -p -m 0755 $(CURDIR)/dist/tflint $(CURDIR)/debian/tflint/usr/bin/
+
+override_dh_dwz:
