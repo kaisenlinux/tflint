@@ -4,11 +4,29 @@ import (
 	"fmt"
 
 	"github.com/hashicorp/hcl/v2"
+	"github.com/terraform-linters/tflint-plugin-sdk/hclext"
 	"github.com/terraform-linters/tflint/terraform/addrs"
 	"github.com/terraform-linters/tflint/terraform/tfdiags"
+	"github.com/terraform-linters/tflint/terraform/tfhcl"
 	"github.com/zclconf/go-cty/cty"
 	"github.com/zclconf/go-cty/cty/convert"
 )
+
+// ExpandBlock expands "dynamic" blocks and resources/modules with count/for_each.
+// Note that Terraform only expands dynamic blocks, but TFLint also expands
+// count/for_each here.
+//
+// Expressions in expanded blocks are evaluated immediately, so all variables
+// contained in attributes specified in the body schema are gathered.
+func (s *Scope) ExpandBlock(body hcl.Body, schema *hclext.BodySchema) (hcl.Body, hcl.Diagnostics) {
+	traversals := tfhcl.ExpandVariablesHCLExt(body, schema)
+	refs, diags := References(traversals)
+
+	ctx, ctxDiags := s.EvalContext(refs)
+	diags = diags.Extend(ctxDiags)
+
+	return tfhcl.Expand(body, ctx), diags
+}
 
 // EvalExpr evaluates a single expression in the receiving context and returns
 // the resulting value. The value will be converted to the given type before
@@ -91,8 +109,11 @@ func (s *Scope) evalContext(refs []*addrs.Reference, selfAddr addrs.Referenceabl
 	// that's redundant in the process of populating our values map.
 	managedResources := map[string]cty.Value{}
 	inputVariables := map[string]cty.Value{}
+	localValues := map[string]cty.Value{}
 	pathAttrs := map[string]cty.Value{}
 	terraformAttrs := map[string]cty.Value{}
+	countAttrs := map[string]cty.Value{}
+	forEachAttrs := map[string]cty.Value{}
 
 	for _, ref := range refs {
 		rng := ref.SourceRange
@@ -121,6 +142,11 @@ func (s *Scope) evalContext(refs []*addrs.Reference, selfAddr addrs.Referenceabl
 			diags = diags.Extend(valDiags)
 			inputVariables[subj.Name] = val
 
+		case addrs.LocalValue:
+			val, valDiags := normalizeRefValue(s.Data.GetLocalValue(subj, rng))
+			diags = diags.Extend(valDiags)
+			localValues[subj.Name] = val
+
 		case addrs.PathAttr:
 			val, valDiags := normalizeRefValue(s.Data.GetPathAttr(subj, rng))
 			diags = diags.Extend(valDiags)
@@ -130,6 +156,16 @@ func (s *Scope) evalContext(refs []*addrs.Reference, selfAddr addrs.Referenceabl
 			val, valDiags := normalizeRefValue(s.Data.GetTerraformAttr(subj, rng))
 			diags = diags.Extend(valDiags)
 			terraformAttrs[subj.Name] = val
+
+		case addrs.CountAttr:
+			val, valDiags := normalizeRefValue(s.Data.GetCountAttr(subj, rng))
+			diags = diags.Extend(valDiags)
+			countAttrs[subj.Name] = val
+
+		case addrs.ForEachAttr:
+			val, valDiags := normalizeRefValue(s.Data.GetForEachAttr(subj, rng))
+			diags = diags.Extend(valDiags)
+			forEachAttrs[subj.Name] = val
 		}
 	}
 
@@ -141,16 +177,16 @@ func (s *Scope) evalContext(refs []*addrs.Reference, selfAddr addrs.Referenceabl
 	}
 
 	vals["var"] = cty.ObjectVal(inputVariables)
+	vals["local"] = cty.ObjectVal(localValues)
 	vals["path"] = cty.ObjectVal(pathAttrs)
 	vals["terraform"] = cty.ObjectVal(terraformAttrs)
+	vals["count"] = cty.ObjectVal(countAttrs)
+	vals["each"] = cty.ObjectVal(forEachAttrs)
 
 	// The following are unknown values as they are not supported by TFLint.
 	vals["resource"] = cty.UnknownVal(cty.DynamicPseudoType)
 	vals["data"] = cty.UnknownVal(cty.DynamicPseudoType)
 	vals["module"] = cty.UnknownVal(cty.DynamicPseudoType)
-	vals["local"] = cty.UnknownVal(cty.DynamicPseudoType)
-	vals["count"] = cty.UnknownVal(cty.DynamicPseudoType)
-	vals["each"] = cty.UnknownVal(cty.DynamicPseudoType)
 	vals["self"] = cty.UnknownVal(cty.DynamicPseudoType)
 
 	return ctx, diags

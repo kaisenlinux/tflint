@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/agext/levenshtein"
 	"github.com/hashicorp/hcl/v2"
+	"github.com/terraform-linters/tflint-plugin-sdk/hclext"
 	"github.com/terraform-linters/tflint/terraform/addrs"
 	"github.com/terraform-linters/tflint/terraform/lang"
 	"github.com/terraform-linters/tflint/terraform/lang/marks"
@@ -19,21 +21,93 @@ type ContextMeta struct {
 	OriginalWorkingDir string
 }
 
+type CallStack struct {
+	addrs map[string]addrs.Reference
+	stack []string
+}
+
+func NewCallStack() *CallStack {
+	return &CallStack{
+		addrs: make(map[string]addrs.Reference),
+		stack: make([]string, 0),
+	}
+}
+
+func (g *CallStack) Push(addr addrs.Reference) hcl.Diagnostics {
+	g.stack = append(g.stack, addr.Subject.String())
+
+	if _, exists := g.addrs[addr.Subject.String()]; exists {
+		return hcl.Diagnostics{
+			{
+				Severity: hcl.DiagError,
+				Summary:  "circular reference found",
+				Detail:   g.String(),
+				Subject:  addr.SourceRange.Ptr(),
+			},
+		}
+	}
+	g.addrs[addr.Subject.String()] = addr
+	return hcl.Diagnostics{}
+}
+
+func (g *CallStack) Pop() {
+	if g.Empty() {
+		panic("cannot pop from empty stack")
+	}
+
+	addr := g.stack[len(g.stack)-1]
+	g.stack = g.stack[:len(g.stack)-1]
+	delete(g.addrs, addr)
+}
+
+func (g *CallStack) String() string {
+	return strings.Join(g.stack, " -> ")
+}
+
+func (g *CallStack) Empty() bool {
+	return len(g.stack) == 0
+}
+
+func (g *CallStack) Clear() {
+	g.addrs = make(map[string]addrs.Reference)
+	g.stack = make([]string, 0)
+}
+
 type Evaluator struct {
 	Meta           *ContextMeta
 	ModulePath     addrs.ModuleInstance
 	Config         *Config
 	VariableValues map[string]map[string]cty.Value
+	CallStack      *CallStack
 }
 
+// EvaluateExpr takes the given HCL expression and evaluates it to produce a value.
 func (e *Evaluator) EvaluateExpr(expr hcl.Expression, wantType cty.Type) (cty.Value, hcl.Diagnostics) {
-	scope := &lang.Scope{
+	if e == nil {
+		panic("evaluator must not be nil")
+	}
+	return e.scope().EvalExpr(expr, wantType)
+}
+
+// ExpandBlock expands "dynamic" blocks and resources/modules with count/for_each.
+//
+// In the expanded body, the content can be retrieved with the HCL API without
+// being aware of the differences in the dynamic block schema. Also, the number
+// of blocks and attribute values will be the same as the expanded result.
+func (e *Evaluator) ExpandBlock(body hcl.Body, schema *hclext.BodySchema) (hcl.Body, hcl.Diagnostics) {
+	if e == nil {
+		return body, nil
+	}
+	return e.scope().ExpandBlock(body, schema)
+}
+
+func (e *Evaluator) scope() *lang.Scope {
+	return &lang.Scope{
 		Data: &evaluationData{
 			Evaluator:  e,
 			ModulePath: e.ModulePath,
 		},
 	}
-	return scope.EvalExpr(expr, wantType)
 }
 
 type evaluationData struct {
@@ -42,6 +116,28 @@ type evaluationData struct {
 }
 
 var _ lang.Data = (*evaluationData)(nil)
+
+func (d *evaluationData) GetCountAttr(addr addrs.CountAttr, rng hcl.Range) (cty.Value, hcl.Diagnostics) {
+	// Note that the actual evaluation of count.index is not done here.
+	// count.index is already evaluated when expanded by ExpandBlock,
+	// and the value is bound to the expanded body.
+	//
+	// Although, there are cases where count.index is evaluated as-is,
+	// such as when not expanding the body. In that case, evaluate it
+	// as an unknown and skip further checks.
+	return cty.UnknownVal(cty.Number), nil
+}
+
+func (d *evaluationData) GetForEachAttr(addr addrs.ForEachAttr, rng hcl.Range) (cty.Value, hcl.Diagnostics) {
+	// Note that the actual evaluation of each.key/each.value is not done here.
+	// each.key/each.value is already evaluated when expanded by ExpandBlock,
+	// and the value is bound to the expanded body.
+	//
+	// Although, there are cases where each.key/each.value is evaluated as-is,
+	// such as when not expanding the body. In that case, evaluate it
+	// as an unknown and skip further checks.
+	return cty.DynamicVal, nil
+}
 
 func (d *evaluationData) GetInputVariable(addr addrs.InputVariable, rng hcl.Range) (cty.Value, hcl.Diagnostics) {
 	var diags hcl.Diagnostics
@@ -100,14 +196,6 @@ func (d *evaluationData) GetInputVariable(addr addrs.InputVariable, rng hcl.Rang
 		val = config.Default
 	}
 
-	// Apply defaults from the variable's type constraint to the value,
-	// unless the value is null. We do not apply defaults to top-level
-	// null values, as doing so could prevent assigning null to a nullable
-	// variable.
-	if config.TypeDefaults != nil && !val.IsNull() {
-		val = config.TypeDefaults.Apply(val)
-	}
-
 	var err error
 	val, err = convert.Convert(val, config.ConstraintType)
 	if err != nil {
@@ -120,11 +208,62 @@ func (d *evaluationData) GetInputVariable(addr addrs.InputVariable, rng hcl.Rang
 		val = cty.UnknownVal(config.Type)
 	}
 
+	// Apply defaults from the variable's type constraint to the value,
+	// unless the value is null. We do not apply defaults to top-level
+	// null values, as doing so could prevent assigning null to a nullable
+	// variable.
+	if config.TypeDefaults != nil && !val.IsNull() {
+		val = config.TypeDefaults.Apply(val)
+	}
+
 	// Mark if sensitive
 	if config.Sensitive {
 		val = val.Mark(marks.Sensitive)
 	}
 
+	return val, diags
+}
+
+func (d *evaluationData) GetLocalValue(addr addrs.LocalValue, rng hcl.Range) (cty.Value, hcl.Diagnostics) {
+	var diags hcl.Diagnostics
+
+	// First we'll make sure the requested value is declared in configuration,
+	// so we can produce a nice message if not.
+	moduleConfig := d.Evaluator.Config.DescendentForInstance(d.ModulePath)
+	if moduleConfig == nil {
+		// should never happen, since we can't be evaluating in a module
+		// that wasn't mentioned in configuration.
+		panic(fmt.Sprintf("local value read from %s, which has no configuration", d.ModulePath))
+	}
+
+	config := moduleConfig.Module.Locals[addr.Name]
+	if config == nil {
+		var suggestions []string
+		for k := range moduleConfig.Module.Locals {
+			suggestions = append(suggestions, k)
+		}
+		suggestion := nameSuggestion(addr.Name, suggestions)
+		if suggestion != "" {
+			suggestion = fmt.Sprintf(" Did you mean %q?", suggestion)
+		}
+
+		diags = diags.Append(&hcl.Diagnostic{
+			Severity: hcl.DiagError,
+			Summary:  `Reference to undeclared local value`,
+			Detail:   fmt.Sprintf(`A local value with the name %q has not been declared.%s`, addr.Name, suggestion),
+			Subject:  rng.Ptr(),
+		})
+		return cty.DynamicVal, diags
+	}
+
+	// Build a call stack for circular reference detection only when getting a local value.
+	if diags := d.Evaluator.CallStack.Push(addrs.Reference{Subject: addr, SourceRange: rng}); diags.HasErrors() {
+		return cty.UnknownVal(cty.DynamicPseudoType), diags
+	}
+
+	val, diags := d.Evaluator.EvaluateExpr(config.Expr, cty.DynamicPseudoType)
+
+	d.Evaluator.CallStack.Pop()
 	return val, diags
 }
 

@@ -119,6 +119,11 @@ func TestIntegration(t *testing.T) {
 			Dir:     "dynblock",
 		},
 		{
+			Name:    "unknown dynamic blocks",
+			Command: "./tflint --format json",
+			Dir:     "dynblock-unknown",
+		},
+		{
 			Name:    "provider config",
 			Command: "./tflint --format json",
 			Dir:     "provider-config",
@@ -177,6 +182,21 @@ func TestIntegration(t *testing.T) {
 			Name:    "sensitve variable",
 			Command: "tflint --format json",
 			Dir:     "sensitive",
+		},
+		{
+			Name:    "just attributes",
+			Command: "tflint --format json",
+			Dir:     "just-attributes",
+		},
+		{
+			Name:    "incompatible host version",
+			Command: "tflint --format json",
+			Dir:     "incompatible-host",
+		},
+		{
+			Name:    "expand resources/modules",
+			Command: "tflint --module --format json",
+			Dir:     "expand",
 		},
 	}
 

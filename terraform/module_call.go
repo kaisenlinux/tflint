@@ -10,9 +10,6 @@ type ModuleCall struct {
 	Name          string
 	SourceAddrRaw string
 
-	Count   hcl.Expression
-	ForEach hcl.Expression
-
 	DeclRange hcl.Range
 }
 
@@ -29,14 +26,6 @@ func decodeModuleBlock(block *hclext.Block) (*ModuleCall, hcl.Diagnostics) {
 		diags = diags.Extend(valDiags)
 	}
 
-	if attr, exists := block.Body.Attributes["count"]; exists {
-		mc.Count = attr.Expr
-	}
-
-	if attr, exists := block.Body.Attributes["for_each"]; exists {
-		mc.ForEach = attr.Expr
-	}
-
 	return mc, diags
 }
 
@@ -44,12 +33,6 @@ var moduleBlockSchema = &hclext.BodySchema{
 	Attributes: []hclext.AttributeSchema{
 		{
 			Name: "source",
-		},
-		{
-			Name: "count",
-		},
-		{
-			Name: "for_each",
 		},
 	},
 }

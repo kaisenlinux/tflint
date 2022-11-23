@@ -7,6 +7,9 @@ import (
 )
 
 type dataForTests struct {
+	CountAttrs     map[string]cty.Value
+	ForEachAttrs   map[string]cty.Value
+	LocalValues    map[string]cty.Value
 	PathAttrs      map[string]cty.Value
 	TerraformAttrs map[string]cty.Value
 	InputVariables map[string]cty.Value
@@ -14,8 +17,20 @@ type dataForTests struct {
 
 var _ Data = &dataForTests{}
 
+func (d *dataForTests) GetCountAttr(addr addrs.CountAttr, rng hcl.Range) (cty.Value, hcl.Diagnostics) {
+	return d.CountAttrs[addr.Name], nil
+}
+
+func (d *dataForTests) GetForEachAttr(addr addrs.ForEachAttr, rng hcl.Range) (cty.Value, hcl.Diagnostics) {
+	return d.ForEachAttrs[addr.Name], nil
+}
+
 func (d *dataForTests) GetInputVariable(addr addrs.InputVariable, rng hcl.Range) (cty.Value, hcl.Diagnostics) {
 	return d.InputVariables[addr.Name], nil
+}
+
+func (d *dataForTests) GetLocalValue(addr addrs.LocalValue, rng hcl.Range) (cty.Value, hcl.Diagnostics) {
+	return d.LocalValues[addr.Name], nil
 }
 
 func (d *dataForTests) GetPathAttr(addr addrs.PathAttr, rng hcl.Range) (cty.Value, hcl.Diagnostics) {

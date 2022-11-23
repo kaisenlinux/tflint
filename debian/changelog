@@ -1,3 +1,9 @@
+tflint (0.43.0-1kaisen) kaisen-packages; urgency=medium
+
+  * Import the 0.43.0 release
+
+ -- Kevin Chevreuil - Kaisen <kaisen@kaisenlinux.org>  Wed, 23 Nov 2022 21:32:49 +0100
+
 tflint (0.41.0-1kaisen) kaisen-packages; urgency=medium
 
   * Initial release

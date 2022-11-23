@@ -7,7 +7,6 @@ import (
 
 	hcl "github.com/hashicorp/hcl/v2"
 	"github.com/terraform-linters/tflint-plugin-sdk/hclext"
-	sdk "github.com/terraform-linters/tflint-plugin-sdk/tflint"
 	"github.com/terraform-linters/tflint/terraform"
 	"github.com/terraform-linters/tflint/terraform/addrs"
 	"github.com/terraform-linters/tflint/terraform/lang"
@@ -26,8 +25,6 @@ type Runner struct {
 	config      *Config
 	currentExpr hcl.Expression
 	modVars     map[string]*moduleVariable
-
-	earlyDecodedResources map[string]map[string]*hclext.Block
 }
 
 // Rule is interface for building the issue
@@ -56,6 +53,7 @@ func NewRunner(c *Config, ants map[string]Annotations, cfg *terraform.Config, va
 		ModulePath:     cfg.Path.UnkeyedInstanceShim(),
 		Config:         cfg.Root,
 		VariableValues: variableValues,
+		CallStack:      terraform.NewCallStack(),
 	}
 
 	runner := &Runner{
@@ -65,24 +63,6 @@ func NewRunner(c *Config, ants map[string]Annotations, cfg *terraform.Config, va
 		Ctx:         ctx,
 		annotations: ants,
 		config:      c,
-
-		earlyDecodedResources: map[string]map[string]*hclext.Block{},
-	}
-
-	for _, resource := range runner.TFConfig.Module.Resources {
-		evaluable, err := runner.isEvaluableResource(resource)
-		if err != nil {
-			return runner, err
-		}
-		if evaluable {
-			resourceType := resource.Labels[0]
-			resourceName := resource.Labels[1]
-
-			if _, exists := runner.earlyDecodedResources[resourceType]; !exists {
-				runner.earlyDecodedResources[resourceType] = map[string]*hclext.Block{}
-			}
-			runner.earlyDecodedResources[resourceType][resourceName] = resource
-		}
 	}
 
 	return runner, nil
@@ -105,18 +85,6 @@ func NewModuleRunners(parent *Runner) ([]*Runner, error) {
 			log.Printf("[INFO] Ignore `%s` module", moduleCall.Name)
 			continue
 		}
-		evaluable, err := parent.isEvaluableModuleCall(moduleCall)
-		if err != nil {
-			return runners, fmt.Errorf(
-				"failed to eval count/for_each meta-arguments in %s:%d; %w",
-				moduleCall.DeclRange.Filename,
-				moduleCall.DeclRange.Start.Line,
-				err,
-			)
-		}
-		if !evaluable {
-			continue
-		}
 
 		moduleCallSchema := &hclext.BodySchema{
 			Blocks: []hclext.BlockSchema{
@@ -134,20 +102,21 @@ func NewModuleRunners(parent *Runner) ([]*Runner, error) {
 			moduleCallSchema.Blocks[0].Body.Attributes = append(moduleCallSchema.Blocks[0].Body.Attributes, attr)
 		}
 
-		moduleCalls, diags := parent.TFConfig.Module.PartialContent(moduleCallSchema)
+		moduleCalls, diags := parent.TFConfig.Module.PartialContent(moduleCallSchema, parent.Ctx)
 		if diags.HasErrors() {
 			return runners, diags
 		}
-		var moduleCallBody *hclext.BodyContent
+		var moduleCallBodies []*hclext.BodyContent
 		for _, block := range moduleCalls.Blocks {
 			if moduleCall.Name == block.Labels[0] {
-				moduleCallBody = block.Body
+				moduleCallBodies = append(moduleCallBodies, block.Body)
 			}
 		}
 
-		modVars := map[string]*moduleVariable{}
-		for varName, attribute := range moduleCallBody.Attributes {
-			if rawVar, exists := cfg.Module.Variables[varName]; exists {
+		for _, body := range moduleCallBodies {
+			modVars := map[string]*moduleVariable{}
+			inputs := terraform.InputValues{}
+			for varName, attribute := range body.Attributes {
 				val, diags := parent.Ctx.EvaluateExpr(attribute.Expr, cty.DynamicPseudoType)
 				if diags.HasErrors() {
 					err := fmt.Errorf(
@@ -159,7 +128,7 @@ func NewModuleRunners(parent *Runner) ([]*Runner, error) {
 					log.Printf("[ERROR] %s", err)
 					return runners, err
 				}
-				rawVar.Default = val
+				inputs[varName] = &terraform.InputValue{Value: val}
 
 				if parent.TFConfig.Path.IsRoot() {
 					modVars[varName] = &moduleVariable{
@@ -179,124 +148,22 @@ func NewModuleRunners(parent *Runner) ([]*Runner, error) {
 					}
 				}
 			}
-		}
 
-		runner, err := NewRunner(parent.config, parent.annotations, cfg)
-		if err != nil {
-			return runners, err
+			runner, err := NewRunner(parent.config, parent.annotations, cfg, inputs)
+			if err != nil {
+				return runners, err
+			}
+			runner.modVars = modVars
+			runners = append(runners, runner)
+			moduleRunners, err := NewModuleRunners(runner)
+			if err != nil {
+				return runners, err
+			}
+			runners = append(runners, moduleRunners...)
 		}
-		runner.modVars = modVars
-		runners = append(runners, runner)
-		moduleRunners, err := NewModuleRunners(runner)
-		if err != nil {
-			return runners, err
-		}
-		runners = append(runners, moduleRunners...)
 	}
 
 	return runners, nil
-}
-
-// GetModuleContent extracts body content from Terraform configurations based on the passed schema.
-// Basically, this function is a wrapper for hclext.PartialContent, but in some ways it reproduces
-// Terraform language semantics.
-//
-//  1. The block schema implicitly adds dynamic blocks to the target
-//     https://www.terraform.io/language/expressions/dynamic-blocks
-//  2. Supports overriding files
-//     https://www.terraform.io/language/files/override
-//  3. Resources not created by count or for_each will be ignored
-//     https://www.terraform.io/language/meta-arguments/count
-//     https://www.terraform.io/language/meta-arguments/for_each
-//
-// However, this behavior is controlled by options. The above is the default.
-func (r *Runner) GetModuleContent(bodyS *hclext.BodySchema, opts sdk.GetModuleContentOption) (*hclext.BodyContent, hcl.Diagnostics) {
-	// For performance, determine in advance whether the target resource exists.
-	if opts.Hint.ResourceType != "" {
-		if _, exists := r.earlyDecodedResources[opts.Hint.ResourceType]; !exists {
-			return &hclext.BodyContent{}, nil
-		}
-	}
-
-	bodyS = appendDynamicBlockSchema(bodyS)
-
-	content, diags := r.TFConfig.Module.PartialContent(bodyS)
-	if diags.HasErrors() {
-		return content, diags
-	}
-
-	content = resolveDynamicBlocks(content)
-
-	if opts.IncludeNotCreated {
-		return content, diags
-	}
-
-	out := &hclext.BodyContent{Attributes: content.Attributes}
-	for _, block := range content.Blocks {
-		if block.Type == "resource" {
-			resourceType := block.Labels[0]
-			resourceName := block.Labels[1]
-
-			if _, exists := r.earlyDecodedResources[resourceType]; !exists {
-				log.Printf("[WARN] Skip walking `%s` because it may not be created", resourceType+"."+resourceName)
-				continue
-			}
-			if _, exists := r.earlyDecodedResources[resourceType][resourceName]; !exists {
-				log.Printf("[WARN] Skip walking `%s` because it may not be created", resourceType+"."+resourceName)
-				continue
-			}
-		}
-
-		out.Blocks = append(out.Blocks, block)
-	}
-
-	return out, diags
-}
-
-// appendDynamicBlockSchema appends a dynamic block schema to block schemes recursively.
-// The content retrieved by the added schema is formatted by resolveDynamicBlocks in the same way as regular blocks.
-func appendDynamicBlockSchema(schema *hclext.BodySchema) *hclext.BodySchema {
-	out := &hclext.BodySchema{Attributes: schema.Attributes}
-
-	for _, block := range schema.Blocks {
-		block.Body = appendDynamicBlockSchema(block.Body)
-
-		out.Blocks = append(out.Blocks, block, hclext.BlockSchema{
-			Type:       "dynamic",
-			LabelNames: []string{"name"},
-			Body: &hclext.BodySchema{
-				Blocks: []hclext.BlockSchema{
-					{
-						Type: "content",
-						Body: block.Body,
-					},
-				},
-			},
-		})
-	}
-
-	return out
-}
-
-// resolveDynamicBlocks formats the passed content based on the block schema added by appendDynamicBlockSchema.
-// This allows you to get all named blocks without being aware of the difference in the structure of the dynamic block.
-func resolveDynamicBlocks(content *hclext.BodyContent) *hclext.BodyContent {
-	out := &hclext.BodyContent{Attributes: content.Attributes}
-
-	for _, block := range content.Blocks {
-		block.Body = resolveDynamicBlocks(block.Body)
-
-		if block.Type != "dynamic" {
-			out.Blocks = append(out.Blocks, block)
-		} else {
-			for _, dynamicContent := range block.Body.Blocks {
-				dynamicContent.Type = block.Labels[0]
-				out.Blocks = append(out.Blocks, dynamicContent)
-			}
-		}
-	}
-
-	return out
 }
 
 // LookupIssues returns issues according to the received files

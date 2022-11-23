@@ -36,6 +36,8 @@ Chocolatey (Windows):
 choco install tflint
 ```
 
+NOTE: The Chocolatey package is NOT directly maintained by the TFLint maintainers. The latest version is always available by manual installation.
+
 ### Verification
 
 GnuPG
@@ -49,7 +51,7 @@ sha256sum --ignore-missing -c checksums.txt
 Cosign
 
 ```
-cosign verify-blob --cert checksums.txt.pem --signature checksums.txt.keyless.sig --certificate-github-workflow-repository=terraform-linters/tflint checksums.txt
+COSIGN_EXPERIMENTAL=1 cosign verify-blob --certificate checksums.txt.pem --signature checksums.txt.keyless.sig --certificate-github-workflow-repository=terraform-linters/tflint checksums.txt
 sha256sum --ignore-missing -c checksums.txt
 ```
 
@@ -85,7 +87,7 @@ plugin "terraform" {
 }
 ```
 
-See the [tflint-ruleset-terraform documentation](https://github.com/terraform-linters/tflint-ruleset-terraform/blob/v0.1.1/docs/configuration.md) for more information.
+See the [tflint-ruleset-terraform documentation](https://github.com/terraform-linters/tflint-ruleset-terraform/blob/v0.2.0/docs/configuration.md) for more information.
 
 Next, If you are using an AWS/Azure/GCP provider, it is a good idea to install the plugin and try it according to each usage:
 
@@ -169,6 +171,10 @@ $ TFLINT_LOG=debug tflint
 ## Developing
 
 See [Developer Guide](docs/developer-guide).
+
+## Security
+
+If you find a security vulnerability, please refer our [security policy](SECURITY.md).
 
 ## Stargazers over time
 

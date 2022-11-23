@@ -9,8 +9,9 @@ import (
 )
 
 type Module struct {
-	Resources   hclext.Blocks
+	Resources   map[string]map[string]*Resource
 	Variables   map[string]*Variable
+	Locals      map[string]*Local
 	ModuleCalls map[string]*ModuleCall
 
 	SourceDir string
@@ -24,8 +25,9 @@ type Module struct {
 
 func NewEmptyModule() *Module {
 	return &Module{
-		Resources:   hclext.Blocks{},
+		Resources:   map[string]map[string]*Resource{},
 		Variables:   map[string]*Variable{},
+		Locals:      map[string]*Local{},
 		ModuleCalls: map[string]*ModuleCall{},
 
 		SourceDir: "",
@@ -39,7 +41,7 @@ func NewEmptyModule() *Module {
 }
 
 func (m *Module) build() hcl.Diagnostics {
-	body, diags := m.PartialContent(moduleSchema)
+	body, diags := m.PartialContent(moduleSchema, nil)
 	if diags.HasErrors() {
 		return diags
 	}
@@ -47,7 +49,11 @@ func (m *Module) build() hcl.Diagnostics {
 	for _, block := range body.Blocks {
 		switch block.Type {
 		case "resource":
-			m.Resources = append(m.Resources, block)
+			r := decodeResourceBlock(block)
+			if _, exists := m.Resources[r.Type]; !exists {
+				m.Resources[r.Type] = map[string]*Resource{}
+			}
+			m.Resources[r.Type][r.Name] = r
 		case "variable":
 			v, valDiags := decodeVairableBlock(block)
 			diags = diags.Extend(valDiags)
@@ -56,18 +62,38 @@ func (m *Module) build() hcl.Diagnostics {
 			call, moduleDiags := decodeModuleBlock(block)
 			diags = diags.Extend(moduleDiags)
 			m.ModuleCalls[call.Name] = call
+		case "locals":
+			locals := decodeLocalsBlock(block)
+			for _, local := range locals {
+				m.Locals[local.Name] = local
+			}
 		}
 	}
 
 	return diags
 }
 
-func (m *Module) PartialContent(schema *hclext.BodySchema) (*hclext.BodyContent, hcl.Diagnostics) {
+// PartialContent extracts body content from Terraform configurations based on the passed schema.
+// Basically, this function is a wrapper for hclext.PartialContent, but in some ways it reproduces
+// Terraform language semantics.
+//
+//  1. Supports overriding files
+//     https://developer.hashicorp.com/terraform/language/files/override
+//  2. Expands "dynamic" blocks
+//     https://developer.hashicorp.com/terraform/language/expressions/dynamic-blocks
+//  3. Expands resource/module depends on the meta-arguments
+//     https://developer.hashicorp.com/terraform/language/meta-arguments/count
+//     https://developer.hashicorp.com/terraform/language/meta-arguments/for_each
+//
+// But 2 and 3 won't run if you didn't pass the evaluation context.
+func (m *Module) PartialContent(schema *hclext.BodySchema, ctx *Evaluator) (*hclext.BodyContent, hcl.Diagnostics) {
 	content := &hclext.BodyContent{}
 	diags := hcl.Diagnostics{}
 
 	for _, f := range m.primaries {
-		c, d := hclext.PartialContent(f.Body, schema)
+		expanded, d := ctx.ExpandBlock(f.Body, schema)
+		diags = diags.Extend(d)
+		c, d := hclext.PartialContent(expanded, schema)
 		diags = diags.Extend(d)
 		for name, attr := range c.Attributes {
 			content.Attributes[name] = attr
@@ -75,7 +101,9 @@ func (m *Module) PartialContent(schema *hclext.BodySchema) (*hclext.BodyContent,
 		content.Blocks = append(content.Blocks, c.Blocks...)
 	}
 	for _, f := range m.overrides {
-		c, d := hclext.PartialContent(f.Body, schema)
+		expanded, d := ctx.ExpandBlock(f.Body, schema)
+		diags = diags.Extend(d)
+		c, d := hclext.PartialContent(expanded, schema)
 		diags = diags.Extend(d)
 		for name, attr := range c.Attributes {
 			content.Attributes[name] = attr
@@ -112,7 +140,6 @@ var moduleSchema = &hclext.BodySchema{
 		{
 			Type:       "resource",
 			LabelNames: []string{"type", "name"},
-			Body:       resourceBlockSchema,
 		},
 		{
 			Type:       "variable",
@@ -123,6 +150,10 @@ var moduleSchema = &hclext.BodySchema{
 			Type:       "module",
 			LabelNames: []string{"name"},
 			Body:       moduleBlockSchema,
+		},
+		{
+			Type: "locals",
+			Body: localBlockSchema,
 		},
 	},
 }
