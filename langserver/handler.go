@@ -16,6 +16,7 @@ import (
 	"github.com/sourcegraph/jsonrpc2"
 	"github.com/spf13/afero"
 	"github.com/terraform-linters/tflint-plugin-sdk/hclext"
+	sdk "github.com/terraform-linters/tflint-plugin-sdk/tflint"
 	"github.com/terraform-linters/tflint/plugin"
 	"github.com/terraform-linters/tflint/terraform"
 	"github.com/terraform-linters/tflint/tflint"
@@ -144,22 +145,32 @@ func (h *handler) chdir(dir string) error {
 func (h *handler) inspect() (map[string][]lsp.Diagnostic, error) {
 	ret := map[string][]lsp.Diagnostic{}
 
-	loader, err := tflint.NewLoader(afero.Afero{Fs: h.fs}, h.config)
+	loader, err := terraform.NewLoader(afero.Afero{Fs: h.fs}, h.rootDir)
 	if err != nil {
 		return ret, fmt.Errorf("Failed to prepare loading: %w", err)
 	}
 
-	configs, err := loader.LoadConfig(".")
-	if err != nil {
-		return ret, fmt.Errorf("Failed to load configurations: %w", err)
+	configs, diags := loader.LoadConfig(".", h.config.Module)
+	if diags.HasErrors() {
+		return ret, fmt.Errorf("Failed to load configurations: %w", diags)
 	}
-	annotations, err := loader.LoadAnnotations(".")
-	if err != nil {
-		return ret, fmt.Errorf("Failed to load configuration tokens: %w", err)
+	files, diags := loader.LoadConfigDirFiles(".")
+	if diags.HasErrors() {
+		return ret, fmt.Errorf("Failed to load configurations: %w", diags)
 	}
-	variables, err := loader.LoadValuesFiles(h.config.Varfiles...)
-	if err != nil {
-		return ret, fmt.Errorf("Failed to load values files: %w", err)
+	annotations := map[string]tflint.Annotations{}
+	for path, file := range files {
+		if !strings.HasSuffix(path, ".tf") {
+			continue
+		}
+		ants, lexDiags := tflint.NewAnnotations(path, file)
+		diags = diags.Extend(lexDiags)
+		annotations[path] = ants
+	}
+
+	variables, diags := loader.LoadValuesFiles(".", h.config.Varfiles...)
+	if diags.HasErrors() {
+		return ret, fmt.Errorf("Failed to load values files: %w", diags)
 	}
 	cliVars, diags := terraform.ParseVariableValues(h.config.Variables, configs.Module.Variables)
 	if diags.HasErrors() {
@@ -167,7 +178,7 @@ func (h *handler) inspect() (map[string][]lsp.Diagnostic, error) {
 	}
 	variables = append(variables, cliVars)
 
-	runner, err := tflint.NewRunner(h.config, annotations, configs, variables...)
+	runner, err := tflint.NewRunner(h.rootDir, h.config, annotations, configs, variables...)
 	if err != nil {
 		return ret, fmt.Errorf("Failed to initialize a runner: %w", err)
 	}
@@ -269,11 +280,11 @@ func pathToURI(path string) lsp.DocumentURI {
 
 func toLSPSeverity(severity tflint.Severity) lsp.DiagnosticSeverity {
 	switch severity {
-	case tflint.ERROR:
+	case sdk.ERROR:
 		return lsp.Error
-	case tflint.WARNING:
+	case sdk.WARNING:
 		return lsp.Warning
-	case tflint.NOTICE:
+	case sdk.NOTICE:
 		return lsp.Information
 	default:
 		panic(fmt.Sprintf("Unexpected severity: %s", severity))

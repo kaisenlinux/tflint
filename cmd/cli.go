@@ -13,6 +13,7 @@ import (
 	"github.com/hashicorp/logutils"
 	flags "github.com/jessevdk/go-flags"
 	"github.com/terraform-linters/tflint/formatter"
+	"github.com/terraform-linters/tflint/terraform"
 	"github.com/terraform-linters/tflint/tflint"
 )
 
@@ -28,24 +29,32 @@ type CLI struct {
 	// outStream and errStream are the stdout and stderr
 	// to write message from the CLI.
 	outStream, errStream io.Writer
-	loader               *tflint.Loader
-	formatter            *formatter.Formatter
-	testMode             bool
+	originalWorkingDir   string
+	sources              map[string][]byte
+
+	// fields for each module
+	config    *tflint.Config
+	loader    *terraform.Loader
+	formatter *formatter.Formatter
 }
 
 // NewCLI returns new CLI initialized by input streams
-func NewCLI(outStream io.Writer, errStream io.Writer) *CLI {
+func NewCLI(outStream io.Writer, errStream io.Writer) (*CLI, error) {
+	wd, err := os.Getwd()
+
 	return &CLI{
-		outStream: outStream,
-		errStream: errStream,
-	}
+		outStream:          outStream,
+		errStream:          errStream,
+		originalWorkingDir: wd,
+		sources:            map[string][]byte{},
+	}, err
 }
 
 // Run invokes the CLI with the given arguments.
 func (cli *CLI) Run(args []string) int {
 	var opts Options
 	parser := flags.NewParser(&opts, flags.HelpFlag)
-	parser.Usage = "[OPTIONS] [FILE or DIR...]"
+	parser.Usage = "--chdir=DIR/--recursive [OPTIONS]"
 	parser.UnknownOptionHandler = unknownOptionHandler
 	// Parse commandline flag
 	args, err := parser.ParseArgs(args)
@@ -79,11 +88,6 @@ func (cli *CLI) Run(args []string) int {
 		cli.formatter.Print(tflint.Issues{}, fmt.Errorf("Failed to parse CLI options; %w", err), map[string][]byte{})
 		return ExitCodeError
 	}
-	dir, filterFiles, err := processArgs(args[1:])
-	if err != nil {
-		cli.formatter.Print(tflint.Issues{}, fmt.Errorf("Failed to parse CLI arguments; %w", err), map[string][]byte{})
-		return ExitCodeError
-	}
 
 	switch {
 	case opts.Version:
@@ -91,55 +95,12 @@ func (cli *CLI) Run(args []string) int {
 	case opts.Init:
 		return cli.init(opts)
 	case opts.Langserver:
-		return cli.startLanguageServer(opts.Config, opts.toConfig())
+		return cli.startLanguageServer(opts)
 	case opts.ActAsBundledPlugin:
 		return cli.actAsBundledPlugin()
 	default:
-		return cli.inspect(opts, dir, filterFiles)
+		return cli.inspect(opts, args)
 	}
-}
-
-func processArgs(args []string) (string, []string, error) {
-	if len(args) == 0 {
-		return ".", []string{}, nil
-	}
-
-	var dir string
-	filterFiles := []string{}
-
-	for _, file := range args {
-		fileInfo, err := os.Stat(file)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return dir, filterFiles, fmt.Errorf("Failed to load `%s`: File not found", file)
-			}
-			return dir, filterFiles, fmt.Errorf("Failed to load `%s`: %s", file, err)
-		}
-
-		if fileInfo.IsDir() {
-			dir = file
-			if len(args) != 1 {
-				return dir, filterFiles, fmt.Errorf("Failed to load `%s`: Multiple arguments are not allowed when passing a directory", file)
-			}
-			return dir, filterFiles, nil
-		}
-
-		if !strings.HasSuffix(file, ".tf") && !strings.HasSuffix(file, ".tf.json") {
-			return dir, filterFiles, fmt.Errorf("Failed to load `%s`: File is not a target of Terraform", file)
-		}
-
-		fileDir := filepath.Dir(file)
-		if dir == "" {
-			dir = fileDir
-			filterFiles = append(filterFiles, file)
-		} else if fileDir == dir {
-			filterFiles = append(filterFiles, file)
-		} else {
-			return dir, filterFiles, fmt.Errorf("Failed to load `%s`: Multiple files in different directories are not allowed", file)
-		}
-	}
-
-	return dir, filterFiles, nil
 }
 
 func unknownOptionHandler(option string, arg flags.SplitArgument, args []string) ([]string, error) {
@@ -168,4 +129,59 @@ func unknownOptionHandler(option string, arg flags.SplitArgument, args []string)
 		return []string{}, errors.New("`loglevel` option was removed in v0.40.0. Please set `TFLINT_LOG` environment variables instead")
 	}
 	return []string{}, fmt.Errorf("`%s` is unknown option. Please run `tflint --help`", option)
+}
+
+func findWorkingDirs(opts Options) ([]string, error) {
+	if opts.Recursive && opts.Chdir != "" {
+		return []string{}, errors.New("cannot use --recursive and --chdir at the same time")
+	}
+
+	workingDirs := []string{}
+
+	if opts.Recursive {
+		// NOTE: The target directory is always the current directory in recursive mode
+		err := filepath.WalkDir(".", func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if !d.IsDir() {
+				return nil
+			}
+			// hidden directories are skipped
+			if path != "." && strings.HasPrefix(d.Name(), ".") {
+				return filepath.SkipDir
+			}
+
+			workingDirs = append(workingDirs, path)
+			return nil
+		})
+		if err != nil {
+			return []string{}, err
+		}
+	} else {
+		if opts.Chdir == "" {
+			workingDirs = []string{"."}
+		} else {
+			workingDirs = []string{opts.Chdir}
+		}
+	}
+
+	return workingDirs, nil
+}
+
+func (cli *CLI) withinChangedDir(dir string, proc func() error) (err error) {
+	if dir != "." {
+		chErr := os.Chdir(dir)
+		if chErr != nil {
+			return fmt.Errorf("Failed to switch to a different working directory; %w", chErr)
+		}
+		defer func() {
+			chErr := os.Chdir(cli.originalWorkingDir)
+			if chErr != nil {
+				err = fmt.Errorf("Failed to switch to the original working directory; %s; %w", chErr, err)
+			}
+		}()
+	}
+
+	return proc()
 }

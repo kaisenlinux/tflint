@@ -64,6 +64,13 @@ func TestIntegration(t *testing.T) {
 			stdout:  "",
 		},
 		{
+			name:    "`--minimum-failure-severity` option with no issues",
+			command: "./tflint --minimum-failure-severity=notice",
+			dir:     "no_issues",
+			status:  cmd.ExitCodeOK,
+			stdout:  "",
+		},
+		{
 			name:    "`--only` option",
 			command: "./tflint --only aws_instance_example_type",
 			dir:     "no_issues",
@@ -197,6 +204,27 @@ func TestIntegration(t *testing.T) {
 			stdout:  fmt.Sprintf("%s (aws_instance_example_type)", color.New(color.Bold).Sprint("instance type is t2.micro")),
 		},
 		{
+			name:    "`--minimum-failure-severity` option with warning issues and minimum-failure-severity notice",
+			command: "./tflint --minimum-failure-severity=notice",
+			dir:     "warnings_found",
+			status:  cmd.ExitCodeIssuesFound,
+			stdout:  fmt.Sprintf("%s (aws_s3_bucket_with_config_example)", color.New(color.Bold).Sprint("bucket name is test, config=bucket")),
+		},
+		{
+			name:    "`--minimum-failure-severity` option with warning issues and minimum-failure-severity warning",
+			command: "./tflint --minimum-failure-severity=warning",
+			dir:     "warnings_found",
+			status:  cmd.ExitCodeIssuesFound,
+			stdout:  fmt.Sprintf("%s (aws_s3_bucket_with_config_example)", color.New(color.Bold).Sprint("bucket name is test, config=bucket")),
+		},
+		{
+			name:    "`--minimum-failure-severity` option with warning issues and minimum-failure-severity error",
+			command: "./tflint --minimum-failure-severity=error",
+			dir:     "warnings_found",
+			status:  cmd.ExitCodeOK,
+			stdout:  fmt.Sprintf("%s (aws_s3_bucket_with_config_example)", color.New(color.Bold).Sprint("bucket name is test, config=bucket")),
+		},
+		{
 			name:    "`--no-color` option",
 			command: "./tflint --no-color",
 			dir:     "issues_found",
@@ -274,6 +302,105 @@ func TestIntegration(t *testing.T) {
 			status:  cmd.ExitCodeError,
 			stderr:  fmt.Sprintf("Failed to load `%s`: Multiple files in different directories are not allowed", filepath.Join("subdir", "main.tf")),
 		},
+		{
+			name:    "--filter",
+			command: "./tflint --filter=empty.tf",
+			dir:     "multiple_files",
+			status:  cmd.ExitCodeOK,
+			stdout:  "", // main.tf is ignored
+		},
+		{
+			name:    "--filter with multiple files",
+			command: "./tflint --filter=empty.tf --filter=main.tf",
+			dir:     "multiple_files",
+			status:  cmd.ExitCodeIssuesFound,
+			// main.tf is not ignored
+			stdout: fmt.Sprintf("%s (aws_instance_example_type)", color.New(color.Bold).Sprint("instance type is t2.micro")),
+		},
+		{
+			name:    "--filter with glob (files found)",
+			command: "./tflint --filter=*.tf",
+			dir:     "multiple_files",
+			status:  cmd.ExitCodeIssuesFound,
+			stdout:  fmt.Sprintf("%s (aws_instance_example_type)", color.New(color.Bold).Sprint("instance type is t2.micro")),
+		},
+		{
+			name:    "--filter with glob (files not found)",
+			command: "./tflint --filter=*_generated.tf",
+			dir:     "multiple_files",
+			status:  cmd.ExitCodeOK,
+			stdout:  "",
+		},
+		{
+			name:    "--chdir",
+			command: "./tflint --chdir=subdir",
+			dir:     "chdir",
+			status:  cmd.ExitCodeIssuesFound,
+			stdout:  fmt.Sprintf("%s (aws_instance_example_type)", color.New(color.Bold).Sprint("instance type is m5.2xlarge")),
+		},
+		{
+			name:    "--chdir and file argument",
+			command: "./tflint --chdir=subdir main.tf",
+			dir:     "chdir",
+			status:  cmd.ExitCodeIssuesFound,
+			stdout:  fmt.Sprintf("%s (aws_instance_example_type)", color.New(color.Bold).Sprint("instance type is m5.2xlarge")),
+		},
+		{
+			name:    "--chdir and directory argument",
+			command: "./tflint --chdir=subdir ../",
+			dir:     "chdir",
+			status:  cmd.ExitCodeError,
+			stderr:  "Cannot use --chdir and directory argument at the same time",
+		},
+		{
+			name:    "--chdir and the current directory argument",
+			command: "./tflint --chdir=subdir .",
+			dir:     "chdir",
+			status:  cmd.ExitCodeError,
+			stderr:  "Cannot use --chdir and directory argument at the same time",
+		},
+		{
+			name:    "--chdir and file under the directory argument",
+			command: fmt.Sprintf("./tflint --chdir=subdir %s", filepath.Join("nested", "main.tf")),
+			dir:     "chdir",
+			status:  cmd.ExitCodeError,
+			stderr:  "Cannot use --chdir and directory argument at the same time",
+		},
+		{
+			name:    "--chdir and --filter",
+			command: "./tflint --chdir=subdir --filter=main.tf",
+			dir:     "chdir",
+			status:  cmd.ExitCodeIssuesFound,
+			stdout:  fmt.Sprintf("%s (aws_instance_example_type)", color.New(color.Bold).Sprint("instance type is m5.2xlarge")),
+		},
+		{
+			name:    "--recursive and file argument",
+			command: "./tflint --recursive main.tf",
+			dir:     "chdir",
+			status:  cmd.ExitCodeError,
+			stderr:  "Cannot use --recursive and arguments at the same time",
+		},
+		{
+			name:    "--recursive and directory argument",
+			command: "./tflint --recursive subdir",
+			dir:     "chdir",
+			status:  cmd.ExitCodeError,
+			stderr:  "Cannot use --recursive and arguments at the same time",
+		},
+		{
+			name:    "--recursive and the current directory argument",
+			command: "./tflint --recursive .",
+			dir:     "chdir",
+			status:  cmd.ExitCodeError,
+			stderr:  "Cannot use --recursive and arguments at the same time",
+		},
+		{
+			name:    "--recursive and --filter",
+			command: "./tflint --recursive --filter=main.tf",
+			dir:     "chdir",
+			status:  cmd.ExitCodeIssuesFound,
+			stdout:  fmt.Sprintf("%s (aws_instance_example_type)", color.New(color.Bold).Sprint("instance type is m5.2xlarge")),
+		},
 	}
 
 	dir, _ := os.Getwd()
@@ -294,7 +421,10 @@ func TestIntegration(t *testing.T) {
 			}
 
 			outStream, errStream := new(bytes.Buffer), new(bytes.Buffer)
-			cli := cmd.NewCLI(outStream, errStream)
+			cli, err := cmd.NewCLI(outStream, errStream)
+			if err != nil {
+				t.Fatal(err)
+			}
 			args := strings.Split(test.command, " ")
 
 			got := cli.Run(args)

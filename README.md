@@ -116,6 +116,8 @@ plugin "foo" {
 
 See also [Configuring Plugins](docs/user-guide/plugins.md).
 
+If you want to add custom rules that are not in existing plugins, you can build your own plugin or write your own policy in Rego. See [Writing Plugins](docs/developer-guide/plugins.md) or [OPA Ruleset](https://github.com/terraform-linters/tflint-ruleset-opa).
+
 ## Usage
 
 TFLint inspects files under the current directory by default. You can change the behavior with the following options/arguments:
@@ -123,7 +125,7 @@ TFLint inspects files under the current directory by default. You can change the
 ```
 $ tflint --help
 Usage:
-  tflint [OPTIONS] [FILE or DIR...]
+  tflint --chdir=DIR/--recursive [OPTIONS]
 
 Application Options:
   -v, --version                                                 Print TFLint version
@@ -139,26 +141,19 @@ Application Options:
       --var-file=FILE                                           Terraform variable file name
       --var='foo=bar'                                           Set a Terraform variable
       --module                                                  Inspect modules
+      --chdir=DIR                                               Switch to a different working directory before executing the command
+      --recursive                                               Run command in each directory recursively
+      --filter=FILE                                             Filter issues by file names or globs.
       --force                                                   Return zero exit status even if issues found
+      --minimum-failure-severity                                Sets minimum severity for exiting with a non-zero error code
       --color                                                   Enable colorized output
       --no-color                                                Disable colorized output
 
 Help Options:
   -h, --help                                                    Show this help message
-
 ```
 
 See [User Guide](docs/user-guide) for details.
-
-## FAQ
-
-### Does TFLint check modules recursively?
-No. TFLint always checks only the current root module (no recursive check). However, you can check calling child modules based on module arguments by enabling [Module Inspection](docs/user-guide/module-inspection.md). This allows you to check that you are not passing illegal values to the module.
-
-Note that if you want to recursively inspect local modules, you need to run them in each directory. This is a limitation that occurs because Terraform always works for one directory. TFLint tries to emulate Terraform's semantics, so cannot perform recursive inspection.
-
-### Do I need to install Terraform for TFLint to work?
-No. TFLint works as a single binary because Terraform is embedded as a library. Note that this means that the version of Terraform used is determined for each TFLint version. See also [Compatibility with Terraform](docs/user-guide/compatibility.md).
 
 ## Debugging
 

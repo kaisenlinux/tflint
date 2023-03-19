@@ -64,6 +64,11 @@ func TestIntegration(t *testing.T) {
 			Dir: "arguments",
 		},
 		{
+			Name:    "arguments with values file",
+			Command: fmt.Sprintf("./tflint --format json -c %s --var-file %s dir", filepath.Join("dir", ".tflint.hcl"), filepath.Join("dir", "subdir.tfvars")),
+			Dir:     "arguments-with-values-file",
+		},
+		{
 			Name:    "plugin",
 			Command: "./tflint --format json --module",
 			Dir:     "plugin",
@@ -198,6 +203,16 @@ func TestIntegration(t *testing.T) {
 			Command: "tflint --module --format json",
 			Dir:     "expand",
 		},
+		{
+			Name:    "chdir",
+			Command: "tflint --chdir dir --module --var-file from_cli.tfvars --format json",
+			Dir:     "chdir",
+		},
+		{
+			Name:    "recursive",
+			Command: "tflint --recursive --format json",
+			Dir:     "recursive",
+		},
 	}
 
 	// Disable the bundled plugin because the `os.Executable()` is go(1) in the tests
@@ -220,6 +235,11 @@ func TestIntegration(t *testing.T) {
 				t.Fatal(err)
 			}
 
+			resultFile := "result.json"
+			if runtime.GOOS == "windows" && IsWindowsResultExist() {
+				resultFile = "result_windows.json"
+			}
+
 			if tc.Env != nil {
 				for k, v := range tc.Env {
 					t.Setenv(k, v)
@@ -227,18 +247,15 @@ func TestIntegration(t *testing.T) {
 			}
 
 			outStream, errStream := new(bytes.Buffer), new(bytes.Buffer)
-			cli := cmd.NewCLI(outStream, errStream)
+			cli, err := cmd.NewCLI(outStream, errStream)
+			if err != nil {
+				t.Fatal(err)
+			}
 			args := strings.Split(tc.Command, " ")
 
 			cli.Run(args)
 
-			var b []byte
-			var err error
-			if runtime.GOOS == "windows" && IsWindowsResultExist() {
-				b, err = os.ReadFile(filepath.Join(testDir, "result_windows.json"))
-			} else {
-				b, err = os.ReadFile(filepath.Join(testDir, "result.json"))
-			}
+			b, err := os.ReadFile(filepath.Join(testDir, resultFile))
 			if err != nil {
 				t.Fatal(err)
 			}

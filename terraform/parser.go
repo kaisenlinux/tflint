@@ -2,7 +2,9 @@ package terraform
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/hashicorp/hcl/v2"
@@ -11,8 +13,8 @@ import (
 	"github.com/zclconf/go-cty/cty"
 )
 
-// Parser is the main interface to read configuration files and other related
-// files from disk.
+// Parser is a fork of configs.Parser. This is the main interface to read
+// configuration files and other related files from disk.
 //
 // It retains a cache of all files that are loaded so that they can be used
 // to create source code snippets in diagnostics, etc.
@@ -48,13 +50,16 @@ func NewParser(fs afero.Fs) *Parser {
 // analysis.
 //
 // This file does not consider a directory with no files to be an error, and
-// will simply return an empty module in that case. Callers should first call
-// Parser.IsConfigDir if they wish to recognize that situation.
+// will simply return an empty module in that case.
 //
 // .tf files are parsed using the HCL native syntax while .tf.json files are
 // parsed using the HCL JSON syntax.
-func (p *Parser) LoadConfigDir(dir string) (*Module, hcl.Diagnostics) {
-	primaries, overrides, diags := p.dirFiles(dir)
+//
+// If a baseDir is passed, the loaded files are assumed to be loaded from that
+// directory. However, SourceDir does not contain baseDir because it affects
+// `path.module` and `path.root` values.
+func (p *Parser) LoadConfigDir(baseDir, dir string) (*Module, hcl.Diagnostics) {
+	primaries, overrides, diags := p.configDirFiles(baseDir, dir)
 	if diags.HasErrors() {
 		return nil, diags
 	}
@@ -64,37 +69,77 @@ func (p *Parser) LoadConfigDir(dir string) (*Module, hcl.Diagnostics) {
 	mod.overrides = make([]*hcl.File, len(overrides))
 
 	for i, path := range primaries {
-		f, loadDiags := p.loadHCLFile(path)
+		f, loadDiags := p.loadHCLFile(baseDir, path)
 		diags = diags.Extend(loadDiags)
 		if loadDiags.HasErrors() {
 			continue
 		}
+		realPath := filepath.Join(baseDir, path)
 
 		mod.primaries[i] = f
-		mod.Sources[path] = f.Bytes
-		mod.Files[path] = f
+		mod.Sources[realPath] = f.Bytes
+		mod.Files[realPath] = f
 	}
 	for i, path := range overrides {
-		f, loadDiags := p.loadHCLFile(path)
+		f, loadDiags := p.loadHCLFile(baseDir, path)
 		diags = diags.Extend(loadDiags)
 		if loadDiags.HasErrors() {
 			continue
 		}
+		realPath := filepath.Join(baseDir, path)
 
 		mod.overrides[i] = f
-		mod.Sources[path] = f.Bytes
-		mod.Files[path] = f
+		mod.Sources[realPath] = f.Bytes
+		mod.Files[realPath] = f
 	}
 	if diags.HasErrors() {
 		return mod, diags
 	}
 
+	// Do not contain baseDir because it affects `path.module` and `path.root` values.
 	mod.SourceDir = dir
 
 	buildDiags := mod.build()
 	diags = diags.Extend(buildDiags)
 
 	return mod, diags
+}
+
+// LoadConfigDirFiles reads the .tf and .tf.json files in the given directory and
+// then returns these files as a map of file path.
+//
+// The difference with LoadConfigDir is that it returns hcl.File instead of
+// a single module. This is useful when parsing HCL files in a context outside of
+// Terraform.
+//
+// If a baseDir is passed, the loaded files are assumed to be loaded from that
+// directory.
+func (p *Parser) LoadConfigDirFiles(baseDir, dir string) (map[string]*hcl.File, hcl.Diagnostics) {
+	primaries, overrides, diags := p.configDirFiles(baseDir, dir)
+	if diags.HasErrors() {
+		return map[string]*hcl.File{}, diags
+	}
+
+	files := map[string]*hcl.File{}
+
+	for _, path := range primaries {
+		f, loadDiags := p.loadHCLFile(baseDir, path)
+		diags = diags.Extend(loadDiags)
+		if loadDiags.HasErrors() {
+			continue
+		}
+		files[filepath.Join(baseDir, path)] = f
+	}
+	for _, path := range overrides {
+		f, loadDiags := p.loadHCLFile(baseDir, path)
+		diags = diags.Extend(loadDiags)
+		if loadDiags.HasErrors() {
+			continue
+		}
+		files[filepath.Join(baseDir, path)] = f
+	}
+
+	return files, diags
 }
 
 // LoadValuesFile reads the file at the given path and parses it as a "values
@@ -110,10 +155,10 @@ func (p *Parser) LoadConfigDir(dir string) (*Module, hcl.Diagnostics) {
 // then the map may be incomplete but should be valid enough for careful
 // static analysis.
 //
-// This method wraps LoadHCLFile, and so it inherits the syntax selection
-// behaviors documented for that method.
-func (p *Parser) LoadValuesFile(path string) (map[string]cty.Value, hcl.Diagnostics) {
-	f, diags := p.loadHCLFile(path)
+// If a baseDir is passed, the loaded file is assumed to be loaded from that
+// directory.
+func (p *Parser) LoadValuesFile(baseDir, path string) (map[string]cty.Value, hcl.Diagnostics) {
+	f, diags := p.loadHCLFile(baseDir, path)
 	if diags.HasErrors() {
 		return nil, diags
 	}
@@ -138,24 +183,37 @@ func (p *Parser) LoadValuesFile(path string) (map[string]cty.Value, hcl.Diagnost
 	return vals, diags
 }
 
-func (p *Parser) loadHCLFile(path string) (*hcl.File, hcl.Diagnostics) {
+func (p *Parser) loadHCLFile(baseDir, path string) (*hcl.File, hcl.Diagnostics) {
 	src, err := p.fs.ReadFile(path)
 
+	realPath := filepath.Join(baseDir, path)
+
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, hcl.Diagnostics{
+				{
+					Severity: hcl.DiagError,
+					Summary:  "Failed to read file",
+					Subject:  &hcl.Range{},
+					Detail:   fmt.Sprintf("The file %q does not exist.", realPath),
+				},
+			}
+		}
 		return nil, hcl.Diagnostics{
 			{
 				Severity: hcl.DiagError,
 				Summary:  "Failed to read file",
-				Detail:   fmt.Sprintf("The file %q could not be read.", path),
+				Subject:  &hcl.Range{},
+				Detail:   fmt.Sprintf("The file %q could not be read.", realPath),
 			},
 		}
 	}
 
 	switch {
 	case strings.HasSuffix(path, ".json"):
-		return p.p.ParseJSON(src, path)
+		return p.p.ParseJSON(src, realPath)
 	default:
-		return p.p.ParseHCL(src, path)
+		return p.p.ParseHCL(src, realPath)
 	}
 }
 
@@ -173,30 +231,21 @@ func (p *Parser) Files() map[string]*hcl.File {
 	return p.p.Files()
 }
 
-// ConfigDirFiles returns lists of the primary and override files configuration
-// files in the given directory.
-//
-// If the given directory does not exist or cannot be read, error diagnostics
-// are returned. If errors are returned, the resulting lists may be incomplete.
-func (p Parser) ConfigDirFiles(dir string) (primary, override []string, diags hcl.Diagnostics) {
-	return p.dirFiles(dir)
-}
-
 // IsConfigDir determines whether the given path refers to a directory that
 // exists and contains at least one Terraform config file (with a .tf or
 // .tf.json extension.)
-func (p *Parser) IsConfigDir(path string) bool {
-	primaryPaths, overridePaths, _ := p.dirFiles(path)
+func (p *Parser) IsConfigDir(baseDir, path string) bool {
+	primaryPaths, overridePaths, _ := p.configDirFiles(baseDir, path)
 	return (len(primaryPaths) + len(overridePaths)) > 0
 }
 
-func (p *Parser) dirFiles(dir string) (primary, override []string, diags hcl.Diagnostics) {
+func (p *Parser) configDirFiles(baseDir, dir string) (primary, override []string, diags hcl.Diagnostics) {
 	infos, err := p.fs.ReadDir(dir)
 	if err != nil {
 		diags = append(diags, &hcl.Diagnostic{
 			Severity: hcl.DiagError,
 			Summary:  "Failed to read module directory",
-			Detail:   fmt.Sprintf("Module directory %s does not exist or cannot be read.", dir),
+			Detail:   fmt.Sprintf("Module directory %s does not exist or cannot be read.", filepath.Join(baseDir, dir)),
 		})
 		return
 	}
@@ -208,7 +257,7 @@ func (p *Parser) dirFiles(dir string) (primary, override []string, diags hcl.Dia
 		}
 
 		name := info.Name()
-		ext := fileExt(name)
+		ext := configFileExt(name)
 		if ext == "" || isIgnoredFile(name) {
 			continue
 		}
@@ -216,7 +265,6 @@ func (p *Parser) dirFiles(dir string) (primary, override []string, diags hcl.Dia
 		baseName := name[:len(name)-len(ext)] // strip extension
 		isOverride := baseName == "override" || strings.HasSuffix(baseName, "_override")
 
-		// TODO: path normalization
 		fullPath := filepath.Join(dir, name)
 		if isOverride {
 			override = append(override, fullPath)
@@ -228,9 +276,40 @@ func (p *Parser) dirFiles(dir string) (primary, override []string, diags hcl.Dia
 	return
 }
 
-// fileExt returns the Terraform configuration extension of the given
+func (p *Parser) autoLoadValuesDirFiles(baseDir, dir string) (files []string, diags hcl.Diagnostics) {
+	infos, err := p.fs.ReadDir(dir)
+	if err != nil {
+		diags = append(diags, &hcl.Diagnostic{
+			Severity: hcl.DiagError,
+			Summary:  "Failed to read module directory",
+			Detail:   fmt.Sprintf("Module directory %s does not exist or cannot be read.", filepath.Join(baseDir, dir)),
+		})
+		return nil, diags
+	}
+
+	for _, info := range infos {
+		if info.IsDir() {
+			// We only care about files
+			continue
+		}
+
+		name := info.Name()
+		if !isAutoVarFile(name) {
+			continue
+		}
+
+		fullPath := filepath.Join(dir, name)
+		files = append(files, fullPath)
+	}
+	// The files should be sorted alphabetically. This is equivalent to priority.
+	sort.Strings(files)
+
+	return
+}
+
+// configFileExt returns the Terraform configuration extension of the given
 // path, or a blank string if it is not a recognized extension.
-func fileExt(path string) string {
+func configFileExt(path string) string {
 	if strings.HasSuffix(path, ".tf") {
 		return ".tf"
 	} else if strings.HasSuffix(path, ".tf.json") {
@@ -238,6 +317,12 @@ func fileExt(path string) string {
 	} else {
 		return ""
 	}
+}
+
+// isAutoVarFile determines if the file ends with .auto.tfvars or .auto.tfvars.json
+func isAutoVarFile(path string) bool {
+	return strings.HasSuffix(path, ".auto.tfvars") ||
+		strings.HasSuffix(path, ".auto.tfvars.json")
 }
 
 // isIgnoredFile returns true if the given filename (which must not have a
