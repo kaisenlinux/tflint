@@ -5,7 +5,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/terraform-linters/tflint/terraform/lang/marks"
+	"github.com/terraform-linters/tflint-plugin-sdk/terraform/lang/marks"
 	"github.com/zclconf/go-cty/cty"
 )
 
@@ -68,7 +68,7 @@ func TestLength(t *testing.T) {
 		},
 		{
 			cty.UnknownVal(cty.List(cty.Bool)),
-			cty.UnknownVal(cty.Number),
+			cty.UnknownVal(cty.Number).Refine().NotNull().NumberRangeInclusive(cty.NumberIntVal(0), cty.NumberIntVal(math.MaxInt64)).NewValue(),
 		},
 		{
 			cty.DynamicVal,
@@ -117,7 +117,7 @@ func TestLength(t *testing.T) {
 		},
 		{
 			cty.UnknownVal(cty.String),
-			cty.UnknownVal(cty.Number),
+			cty.UnknownVal(cty.Number).Refine().NotNull().NumberRangeLowerBound(cty.NumberIntVal(0), true).NewValue(),
 		},
 		{
 			cty.DynamicVal,

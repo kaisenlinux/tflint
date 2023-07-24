@@ -88,6 +88,10 @@ func (cli *CLI) Run(args []string) int {
 		cli.formatter.Print(tflint.Issues{}, fmt.Errorf("Failed to parse CLI options; %w", err), map[string][]byte{})
 		return ExitCodeError
 	}
+	if len(args) > 1 {
+		cli.formatter.Print(tflint.Issues{}, fmt.Errorf("Command line arguments support was dropped in v0.47. Use --chdir or --filter instead."), map[string][]byte{})
+		return ExitCodeError
+	}
 
 	switch {
 	case opts.Version:
@@ -99,7 +103,7 @@ func (cli *CLI) Run(args []string) int {
 	case opts.ActAsBundledPlugin:
 		return cli.actAsBundledPlugin()
 	default:
-		return cli.inspect(opts, args)
+		return cli.inspect(opts)
 	}
 }
 

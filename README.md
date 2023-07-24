@@ -40,18 +40,10 @@ NOTE: The Chocolatey package is NOT directly maintained by the TFLint maintainer
 
 ### Verification
 
-GnuPG
+Releases are signed by [Cosign](https://github.com/sigstore/cosign). `cosign verify-blob` ensures that the release was built with this repository's GitHub Actions.
 
 ```
-gpg --import 8CE69160EB3F2FE9.key
-gpg --verify checksum.txt.sig checksum.txt
-sha256sum --ignore-missing -c checksums.txt
-```
-
-Cosign
-
-```
-COSIGN_EXPERIMENTAL=1 cosign verify-blob --certificate checksums.txt.pem --signature checksums.txt.keyless.sig --certificate-github-workflow-repository=terraform-linters/tflint checksums.txt
+cosign verify-blob --certificate=checksums.txt.pem --signature=checksums.txt.keyless.sig --certificate-identity-regexp="^https://github.com/terraform-linters/tflint" --certificate-oidc-issuer=https://token.actions.githubusercontent.com checksums.txt
 sha256sum --ignore-missing -c checksums.txt
 ```
 
@@ -140,14 +132,16 @@ Application Options:
       --enable-plugin=PLUGIN_NAME                               Enable plugins from the command line
       --var-file=FILE                                           Terraform variable file name
       --var='foo=bar'                                           Set a Terraform variable
-      --module                                                  Inspect modules
+      --module                                                  Enable module inspection
+      --no-module                                               Disable module inspection
       --chdir=DIR                                               Switch to a different working directory before executing the command
       --recursive                                               Run command in each directory recursively
-      --filter=FILE                                             Filter issues by file names or globs.
+      --filter=FILE                                             Filter issues by file names or globs
       --force                                                   Return zero exit status even if issues found
-      --minimum-failure-severity                                Sets minimum severity for exiting with a non-zero error code
+      --minimum-failure-severity=[error|warning|notice]         Sets minimum severity level for exiting with a non-zero error code
       --color                                                   Enable colorized output
       --no-color                                                Disable colorized output
+      --fix                                                     Fix issues automatically
 
 Help Options:
   -h, --help                                                    Show this help message

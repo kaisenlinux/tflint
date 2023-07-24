@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/hashicorp/go-version"
 	hcl "github.com/hashicorp/hcl/v2"
 	"github.com/terraform-linters/tflint-plugin-sdk/hclext"
+	"github.com/terraform-linters/tflint-plugin-sdk/plugin/plugin2host"
 	sdk "github.com/terraform-linters/tflint-plugin-sdk/tflint"
 	"github.com/terraform-linters/tflint/terraform"
 	"github.com/terraform-linters/tflint/tflint"
@@ -15,14 +17,17 @@ import (
 
 // GRPCServer is a gRPC server for responding to requests from plugins.
 type GRPCServer struct {
-	runner     *tflint.Runner
-	rootRunner *tflint.Runner
-	files      map[string]*hcl.File
+	runner           *tflint.Runner
+	rootRunner       *tflint.Runner
+	files            map[string]*hcl.File
+	clientSDKVersion *version.Version
 }
 
+var _ plugin2host.Server = (*GRPCServer)(nil)
+
 // NewGRPCServer initializes a gRPC server for plugins.
-func NewGRPCServer(runner *tflint.Runner, rootRunner *tflint.Runner, files map[string]*hcl.File) *GRPCServer {
-	return &GRPCServer{runner: runner, rootRunner: rootRunner, files: files}
+func NewGRPCServer(runner *tflint.Runner, rootRunner *tflint.Runner, files map[string]*hcl.File, sdkVersion *version.Version) *GRPCServer {
+	return &GRPCServer{runner: runner, rootRunner: rootRunner, files: files, clientSDKVersion: sdkVersion}
 }
 
 // GetOriginalwd returns the original working directory.
@@ -68,6 +73,11 @@ func (s *GRPCServer) GetModuleContent(bodyS *hclext.BodySchema, opts sdk.GetModu
 
 // GetFile returns the hcl.File based on passed the file name.
 func (s *GRPCServer) GetFile(name string) (*hcl.File, error) {
+	// Considering that autofix has been applied, prioritize returning the value of runner.Files().
+	if file, exists := s.runner.Files()[name]; exists {
+		return file, nil
+	}
+	// If the file is not found in the current module, it may be in other modules (e.g. root module).
 	return s.files[name], nil
 }
 
@@ -125,6 +135,11 @@ func (s *GRPCServer) EvaluateExpr(expr hcl.Expression, opts sdk.EvaluateExprOpti
 		return val, diags
 	}
 
+	// SDK v0.16+ introduces client-side handling of unknown/NULL/sensitive values.
+	if s.clientSDKVersion != nil && s.clientSDKVersion.GreaterThanOrEqual(version.Must(version.NewVersion("0.16.0"))) {
+		return val, nil
+	}
+
 	if val.ContainsMarked() {
 		err := fmt.Errorf(
 			"sensitive value found in %s:%d%w",
@@ -173,22 +188,40 @@ func (s *GRPCServer) EvaluateExpr(expr hcl.Expression, opts sdk.EvaluateExprOpti
 }
 
 // EmitIssue stores an issue in the server based on passed rule, message, and location.
-// If the range associated with the issue is an expression, it propagates to the runner
-// that the issue found in that expression. This allows you to determine if the issue was caused
-// by a module argument in the case of module inspection.
-func (s *GRPCServer) EmitIssue(rule sdk.Rule, message string, location hcl.Range) error {
+func (s *GRPCServer) EmitIssue(rule sdk.Rule, message string, location hcl.Range, fixable bool) (bool, error) {
+	// If the issue range represents an expression, it is emitted based on that context.
+	// This is important for module inspection that emits issues for module arguments included in the expression.
+	expr, err := s.getExprFromRange(location)
+	if err != nil {
+		// If the range does not represent an expression, just emit it without context.
+		return s.runner.EmitIssue(rule, message, location, fixable), nil
+	}
+
+	var applied bool
+	err = s.runner.WithExpressionContext(expr, func() error {
+		applied = s.runner.EmitIssue(rule, message, location, fixable)
+		return nil
+	})
+	return applied, err
+}
+
+func (s *GRPCServer) getExprFromRange(location hcl.Range) (hcl.Expression, error) {
 	file := s.runner.File(location.Filename)
 	if file == nil {
-		s.runner.EmitIssue(rule, message, location)
-		return nil
+		return nil, errors.New("file not found")
 	}
 	expr, diags := hclext.ParseExpression(location.SliceBytes(file.Bytes), location.Filename, location.Start)
 	if diags.HasErrors() {
-		s.runner.EmitIssue(rule, message, location)
-		return nil
+		return nil, diags
 	}
-	return s.runner.WithExpressionContext(expr, func() error {
-		s.runner.EmitIssue(rule, message, location)
-		return nil
-	})
+	return expr, nil
+}
+
+// ApplyChanges applies the autofix changes to the runner.
+func (s *GRPCServer) ApplyChanges(changes map[string][]byte) error {
+	diags := s.runner.ApplyChanges(changes)
+	if diags.HasErrors() {
+		return diags
+	}
+	return nil
 }
