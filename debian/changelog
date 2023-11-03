@@ -1,3 +1,9 @@
+tflint (0.48.0-1kaisen) kaisen-packages; urgency=medium
+
+  * Import the 0.48.0 version
+
+ -- Kevin Chevreuil - Kaisen <kaisen@kaisenlinux.org>  Thu, 02 Nov 2023 16:00:09 +0100
+
 tflint (0.47.0-2kaisen) kaisen-packages; urgency=medium
 
   * Remove the golang-go as package dependancy
