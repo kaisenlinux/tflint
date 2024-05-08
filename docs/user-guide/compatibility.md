@@ -4,6 +4,8 @@ TFLint interprets the [Terraform language](https://developer.hashicorp.com/terra
 
 The parser supports Terraform v1.x syntax and semantics. The language compatibility on Terraform v1.x is defined by [Compatibility Promises](https://developer.hashicorp.com/terraform/language/v1-compatibility-promises). TFLint follows this promise. New features are only supported in newer TFLint versions, and bug and experimental features compatibility are not guaranteed.
 
+The latest supported version is Terraform v1.8.
+
 ## Input Variables
 
 Like Terraform, TFLint supports the `--var`,` --var-file` options, environment variables (`TF_VAR_*`), and automatically loading variable definitions (`terraform.tfvars` and `*.auto.tfvars`) files. See [Input Variables](https://developer.hashicorp.com/terraform/language/values/variables).
@@ -117,9 +119,11 @@ The values below are state-dependent and cannot be determined statically, so TFL
 - `data.<DATA TYPE>.<NAME>`
 - `self`
 
-## Built-in Functions
+## Functions
 
-[Built-in Functions](https://developer.hashicorp.com/terraform/language/functions) are fully supported.
+[Built-in Functions](https://developer.hashicorp.com/terraform/language/functions) are fully supported. However, functions such as [`plantimestamp`](https://developer.hashicorp.com/terraform/language/functions/plantimestamp) whose return value cannot be determined statically will return an unknown value.
+
+[Provider-defined functions](https://www.hashicorp.com/blog/terraform-1-8-adds-provider-functions-for-aws-google-cloud-and-kubernetes) always return unknown values, except for `provider::terraform::*` functions.
 
 ## Dynamic Blocks
 
@@ -143,7 +147,7 @@ Similar to support for meta-arguments, some rules may process a dynamic block as
 
 ## Modules
 
-Resources contained within modules are ignored by default, but when the [Module Inspection](./module-inspection.md) is enabled, the arguments of module calls are inspected.
+TFLint doesn't automatically inspect the content of modules themselves. However, by default, it will analyze their content in order to raise any issues that arise from attributes in module calls.
 
 ```hcl
 resource "aws_instance" "static" {
@@ -158,6 +162,8 @@ module "aws_instance" {
   encrypted = false # => Must be encrypted
 }
 ```
+
+Remote modules can also be inspected. See [Calling Modules](./calling-modules.md) for details.
 
 ## Environment Variables
 

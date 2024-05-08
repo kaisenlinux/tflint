@@ -61,14 +61,19 @@ func TestIntegration(t *testing.T) {
 			Dir:     "multiple_files",
 		},
 		{
-			Name:    "module inspection",
-			Command: "./tflint --module --format json --fix",
+			Name:    "calling modules",
+			Command: "./tflint --format json --fix",
 			Dir:     "module",
 		},
 		{
 			Name:    "--chdir",
 			Command: "./tflint --chdir=dir --format json --fix",
 			Dir:     "chdir",
+		},
+		{
+			Name:    "--chdir with conflict",
+			Command: "./tflint --chdir=dir --format json --fix",
+			Dir:     "chdir_with_conflict",
 		},
 		{
 			Name:    "--filter",

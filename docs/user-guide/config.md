@@ -1,20 +1,24 @@
 # Configuring TFLint
 
-You can change the behavior not only in CLI flags but also in config files. By default, TFLint looks up `.tflint.hcl` according to the following priority:
+You can change the behavior not only in CLI flags but also in config files. TFLint loads config files according to the following priority order:
 
-- Current directory (`./.tflint.hcl`)
-- Home directory (`~/.tflint.hcl`)
-
-However, if `--chdir` or `--recursive` is used, the config file will be loaded relative to the module (changed) directory.
+1. File passed by the `--config` option
+2. File set by the `TFLINT_CONFIG_FILE` environment variable
+3. Current directory (`./.tflint.hcl`)
+4. Home directory (`~/.tflint.hcl`)
 
 The config file is written in [HCL](https://github.com/hashicorp/hcl). An example is shown below:
 
 ```hcl
+tflint {
+  required_version = ">= 0.50"
+}
+
 config {
   format = "compact"
   plugin_dir = "~/.tflint.d/plugins"
 
-  module = true
+  call_module_type = "local"
   force = false
   disabled_by_default = false
 
@@ -38,17 +42,16 @@ rule "aws_instance_invalid_type" {
 }
 ```
 
-You can also use another file as a config file with the `--config` option:
-
-```
-$ tflint --config other_config.hcl
-```
-
-This is also resolved relative to the module directory when `--chdir` or `--recursive` is used. To use a configuration file from the process working directory when recursing, pass an absolute path:
+The file path is resolved relative to the module directory when `--chdir` or `--recursive` is used. To use a config file from the working directory when recursing, pass an absolute path:
 
 ```sh
 tflint --recursive --config "$(pwd)/.tflint.hcl"
 ```
+
+### `required_version`
+
+Restrict the TFLint version used. This is almost the same as [Terraform's `required_version`](https://developer.hashicorp.com/terraform/language/settings#specifying-a-required-terraform-version).
+You can write version constraints in the same way.
 
 ### `format`
 
@@ -69,11 +72,27 @@ In recursive mode (`--recursive`), this field will be ignored in configuration f
 
 Set the plugin directory. The default is `~/.tflint.d/plugins` (or `./.tflint.d/plugins`). See also [Configuring Plugins](plugins.md#advanced-usage)
 
-### `module`
+### `call_module_type`
 
-CLI flag: `--module`
+CLI flag: `--call-module-type`
 
-Enable [Module Inspection](module-inspection.md).
+Select types of module to call. The following values are valid:
+
+- all
+- local (default)
+- none
+
+If you select `all`, you can call all (local and remote) modules. See [Calling Modules](./calling-modules.md).
+
+```hcl
+config {
+  call_module_type = "all"
+}
+```
+
+```console
+$ tflint --call-module-type=all
+```
 
 ### `force`
 
@@ -116,7 +135,7 @@ $ tflint --only aws_instance_invalid_type --only aws_instance_previous_type
 
 CLI flag: `--ignore-module`
 
-Skip inspections for module calls in [Module Inspection](module-inspection.md). Note that you need to specify module sources rather than module ids for backward compatibility.
+Adding a module source to `ignore_module` will cause it to be ignored when [calling modules](./calling-modules.md). Note that you need to specify module sources rather than module ids for backward compatibility.
 
 ```hcl
 config {

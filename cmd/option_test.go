@@ -7,6 +7,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	flags "github.com/jessevdk/go-flags"
+	"github.com/terraform-linters/tflint/terraform"
 	"github.com/terraform-linters/tflint/tflint"
 )
 
@@ -22,11 +23,26 @@ func Test_toConfig(t *testing.T) {
 			Expected: tflint.EmptyConfig(),
 		},
 		{
+			Name:    "--call-module-type",
+			Command: "./tflint --call-module-type all",
+			Expected: &tflint.Config{
+				CallModuleType:    terraform.CallAllModule,
+				CallModuleTypeSet: true,
+				Force:             false,
+				IgnoreModules:     map[string]bool{},
+				Varfiles:          []string{},
+				Variables:         []string{},
+				DisabledByDefault: false,
+				Rules:             map[string]*tflint.RuleConfig{},
+				Plugins:           map[string]*tflint.PluginConfig{},
+			},
+		},
+		{
 			Name:    "--module",
 			Command: "./tflint --module",
 			Expected: &tflint.Config{
-				Module:            true,
-				ModuleSet:         true,
+				CallModuleType:    terraform.CallAllModule,
+				CallModuleTypeSet: true,
 				Force:             false,
 				IgnoreModules:     map[string]bool{},
 				Varfiles:          []string{},
@@ -40,8 +56,23 @@ func Test_toConfig(t *testing.T) {
 			Name:    "--no-module",
 			Command: "./tflint --no-module",
 			Expected: &tflint.Config{
-				Module:            false,
-				ModuleSet:         true,
+				CallModuleType:    terraform.CallNoModule,
+				CallModuleTypeSet: true,
+				Force:             false,
+				IgnoreModules:     map[string]bool{},
+				Varfiles:          []string{},
+				Variables:         []string{},
+				DisabledByDefault: false,
+				Rules:             map[string]*tflint.RuleConfig{},
+				Plugins:           map[string]*tflint.PluginConfig{},
+			},
+		},
+		{
+			Name:    "--module and --call-module-type",
+			Command: "./tflint --module --call-module-type none",
+			Expected: &tflint.Config{
+				CallModuleType:    terraform.CallNoModule,
+				CallModuleTypeSet: true,
 				Force:             false,
 				IgnoreModules:     map[string]bool{},
 				Varfiles:          []string{},
@@ -55,7 +86,7 @@ func Test_toConfig(t *testing.T) {
 			Name:    "--force",
 			Command: "./tflint --force",
 			Expected: &tflint.Config{
-				Module:            false,
+				CallModuleType:    terraform.CallLocalModule,
 				Force:             true,
 				ForceSet:          true,
 				IgnoreModules:     map[string]bool{},
@@ -70,7 +101,7 @@ func Test_toConfig(t *testing.T) {
 			Name:    "--ignore-module",
 			Command: "./tflint --ignore-module module1,module2",
 			Expected: &tflint.Config{
-				Module:            false,
+				CallModuleType:    terraform.CallLocalModule,
 				Force:             false,
 				IgnoreModules:     map[string]bool{"module1": true, "module2": true},
 				Varfiles:          []string{},
@@ -81,10 +112,10 @@ func Test_toConfig(t *testing.T) {
 			},
 		},
 		{
-			Name:    "multiple `--ignore-module`",
+			Name:    "multiple --ignore-module",
 			Command: "./tflint --ignore-module module1 --ignore-module module2",
 			Expected: &tflint.Config{
-				Module:            false,
+				CallModuleType:    terraform.CallLocalModule,
 				Force:             false,
 				IgnoreModules:     map[string]bool{"module1": true, "module2": true},
 				Varfiles:          []string{},
@@ -98,7 +129,7 @@ func Test_toConfig(t *testing.T) {
 			Name:    "--var-file",
 			Command: "./tflint --var-file example1.tfvars,example2.tfvars",
 			Expected: &tflint.Config{
-				Module:            false,
+				CallModuleType:    terraform.CallLocalModule,
 				Force:             false,
 				IgnoreModules:     map[string]bool{},
 				Varfiles:          []string{"example1.tfvars", "example2.tfvars"},
@@ -109,10 +140,10 @@ func Test_toConfig(t *testing.T) {
 			},
 		},
 		{
-			Name:    "multiple `--var-file`",
+			Name:    "multiple --var-file",
 			Command: "./tflint --var-file example1.tfvars --var-file example2.tfvars",
 			Expected: &tflint.Config{
-				Module:            false,
+				CallModuleType:    terraform.CallLocalModule,
 				Force:             false,
 				IgnoreModules:     map[string]bool{},
 				Varfiles:          []string{"example1.tfvars", "example2.tfvars"},
@@ -126,7 +157,7 @@ func Test_toConfig(t *testing.T) {
 			Name:    "--var",
 			Command: "./tflint --var foo=bar --var bar=baz",
 			Expected: &tflint.Config{
-				Module:            false,
+				CallModuleType:    terraform.CallLocalModule,
 				Force:             false,
 				IgnoreModules:     map[string]bool{},
 				Varfiles:          []string{},
@@ -140,7 +171,7 @@ func Test_toConfig(t *testing.T) {
 			Name:    "--enable-rule",
 			Command: "./tflint --enable-rule aws_instance_invalid_type --enable-rule aws_instance_previous_type",
 			Expected: &tflint.Config{
-				Module:            false,
+				CallModuleType:    terraform.CallLocalModule,
 				Force:             false,
 				IgnoreModules:     map[string]bool{},
 				Varfiles:          []string{},
@@ -165,7 +196,7 @@ func Test_toConfig(t *testing.T) {
 			Name:    "--disable-rule",
 			Command: "./tflint --disable-rule aws_instance_invalid_type --disable-rule aws_instance_previous_type",
 			Expected: &tflint.Config{
-				Module:            false,
+				CallModuleType:    terraform.CallLocalModule,
 				Force:             false,
 				IgnoreModules:     map[string]bool{},
 				Varfiles:          []string{},
@@ -190,7 +221,7 @@ func Test_toConfig(t *testing.T) {
 			Name:    "--only",
 			Command: "./tflint --only aws_instance_invalid_type",
 			Expected: &tflint.Config{
-				Module:               false,
+				CallModuleType:       terraform.CallLocalModule,
 				Force:                false,
 				IgnoreModules:        map[string]bool{},
 				Varfiles:             []string{},
@@ -212,7 +243,7 @@ func Test_toConfig(t *testing.T) {
 			Name:    "--enable-plugin",
 			Command: "./tflint --enable-plugin test --enable-plugin another-test",
 			Expected: &tflint.Config{
-				Module:            false,
+				CallModuleType:    terraform.CallLocalModule,
 				Force:             false,
 				IgnoreModules:     map[string]bool{},
 				Varfiles:          []string{},
@@ -237,7 +268,7 @@ func Test_toConfig(t *testing.T) {
 			Name:    "--format",
 			Command: "./tflint --format compact",
 			Expected: &tflint.Config{
-				Module:            false,
+				CallModuleType:    terraform.CallLocalModule,
 				Force:             false,
 				IgnoreModules:     map[string]bool{},
 				Varfiles:          []string{},
@@ -269,6 +300,126 @@ func Test_toConfig(t *testing.T) {
 			}
 			if diff := cmp.Diff(tc.Expected, ret, eqlopts...); diff != "" {
 				t.Fatal(diff)
+			}
+		})
+	}
+}
+
+func Test_toWorkerCommands(t *testing.T) {
+	tests := []struct {
+		name       string
+		in         []string
+		workingDir string
+		want       []string
+	}{
+		{
+			name:       "no args",
+			in:         []string{},
+			workingDir: "subdir",
+			want:       []string{"--act-as-worker", "--chdir=subdir", "--force"},
+		},
+		{
+			name: "all",
+			in: []string{
+				"--version",
+				"--init",
+				"--langserver",
+				"--format=json",
+				"--config=tflint.hcl",
+				"--ignore-module=module1",
+				"--ignore-module=module2",
+				"--enable-rule=rule1",
+				"--enable-rule=rule2",
+				"--disable-rule=rule3",
+				"--disable-rule=rule4",
+				"--only=rule5",
+				"--only=rule6",
+				"--enable-plugin=plugin1",
+				"--enable-plugin=plugin2",
+				"--var-file=example1.tfvars",
+				"--var-file=example2.tfvars",
+				"--var=foo=bar",
+				"--var=bar=baz",
+				"--module",
+				"--no-module",
+				"--call-module-type=all",
+				"--chdir=dir",
+				"--recursive",
+				"--filter=main1.tf",
+				"--filter=main2.tf",
+				"--force",
+				"--minimum-failure-severity=warning",
+				"--color",
+				"--no-color",
+				"--fix",
+				"--no-parallel-runners",
+				"--max-workers=2",
+				"--act-as-bundled-plugin",
+				"--act-as-worker",
+			},
+			workingDir: "subdir",
+			want: []string{
+				// "--version",
+				// "--init",
+				// "--langserver",
+				// "--format=json",
+				"--config=tflint.hcl",
+				"--ignore-module=module1",
+				"--ignore-module=module2",
+				"--enable-rule=rule1",
+				"--enable-rule=rule2",
+				"--disable-rule=rule3",
+				"--disable-rule=rule4",
+				"--only=rule5",
+				"--only=rule6",
+				"--enable-plugin=plugin1",
+				"--enable-plugin=plugin2",
+				"--var-file=example1.tfvars",
+				"--var-file=example2.tfvars",
+				"--var=foo=bar",
+				"--var=bar=baz",
+				"--module",
+				"--no-module",
+				"--call-module-type=all",
+				"--chdir=subdir", // "--chdir=dir",
+				// "--recursive",
+				"--filter=main1.tf",
+				"--filter=main2.tf",
+				"--force",
+				// "--minimum-failure-severity=warning",
+				// "--color",
+				// "--no-color",
+				"--fix",
+				"--no-parallel-runners",
+				// "--max-workers=2",
+				// "--act-as-bundled-plugin",
+				"--act-as-worker",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var in Options
+			parser := flags.NewParser(&in, flags.HelpFlag)
+			_, err := parser.ParseArgs(test.in)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			got := in.toWorkerCommands(test.workingDir)
+
+			opt := cmpopts.SortSlices(func(a, b string) bool { return a < b })
+			if diff := cmp.Diff(test.want, got, opt); diff != "" {
+				t.Fatal(diff)
+			}
+
+			// Check if the output can be parsed
+			var out Options
+			parser = flags.NewParser(&out, flags.HelpFlag)
+			_, err = parser.ParseArgs(got)
+			if err != nil {
+				t.Fatal(err)
 			}
 		})
 	}

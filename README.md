@@ -2,7 +2,7 @@
 [![Build Status](https://github.com/terraform-linters/tflint/workflows/build/badge.svg?branch=master)](https://github.com/terraform-linters/tflint/actions)
 [![GitHub release](https://img.shields.io/github/release/terraform-linters/tflint.svg)](https://github.com/terraform-linters/tflint/releases/latest)
 [![Terraform Compatibility](https://img.shields.io/badge/terraform-%3E%3D%201.0-blue)](docs/user-guide/compatibility.md)
-[![License: MPL 2.0](https://img.shields.io/badge/License-MPL%202.0-blue.svg)](LICENSE)
+[![License: MPL 2.0 + BUSL 1.1](https://img.shields.io/badge/License-MPL%202.0%20+%20BUSL%201.1-blue.svg)](#license)
 [![Go Report Card](https://goreportcard.com/badge/github.com/terraform-linters/tflint)](https://goreportcard.com/report/github.com/terraform-linters/tflint)
 [![Homebrew](https://img.shields.io/badge/dynamic/json.svg?url=https://formulae.brew.sh/api/formula/tflint.json&query=$.versions.stable&label=homebrew)](https://formulae.brew.sh/formula/tflint)
 
@@ -49,14 +49,7 @@ sha256sum --ignore-missing -c checksums.txt
 
 ### Docker
 
-Instead of installing directly, you can use the Docker images:
-
-| Name | Description |
-| ---- | ----------- |
-| [ghcr.io/terraform-linters/tflint](https://github.com/terraform-linters/tflint/pkgs/container/tflint) | Basic image |
-| [ghcr.io/terraform-linters/tflint-bundle](https://github.com/terraform-linters/tflint-bundle/pkgs/container/tflint-bundle) | A Docker image with TFLint and ruleset plugins |
-
-Example:
+Instead of installing directly, you can use the Docker image:
 
 ```console
 docker run --rm -v $(pwd):/data -t ghcr.io/terraform-linters/tflint
@@ -79,7 +72,7 @@ plugin "terraform" {
 }
 ```
 
-See the [tflint-ruleset-terraform documentation](https://github.com/terraform-linters/tflint-ruleset-terraform/blob/v0.2.0/docs/configuration.md) for more information.
+See the [tflint-ruleset-terraform documentation](https://github.com/terraform-linters/tflint-ruleset-terraform/blob/main/docs/configuration.md) for more information.
 
 Next, If you are using an AWS/Azure/GCP provider, it is a good idea to install the plugin and try it according to each usage:
 
@@ -132,8 +125,7 @@ Application Options:
       --enable-plugin=PLUGIN_NAME                               Enable plugins from the command line
       --var-file=FILE                                           Terraform variable file name
       --var='foo=bar'                                           Set a Terraform variable
-      --module                                                  Enable module inspection
-      --no-module                                               Disable module inspection
+      --call-module-type=[all|local|none]                       Types of module to call (default: local)
       --chdir=DIR                                               Switch to a different working directory before executing the command
       --recursive                                               Run command in each directory recursively
       --filter=FILE                                             Filter issues by file names or globs
@@ -142,6 +134,8 @@ Application Options:
       --color                                                   Enable colorized output
       --no-color                                                Disable colorized output
       --fix                                                     Fix issues automatically
+      --no-parallel-runners                                     Disable per-runner parallelism
+      --max-workers=N                                           Set maximum number of workers in recursive inspection (default: number of CPUs)
 
 Help Options:
   -h, --help                                                    Show this help message
@@ -164,6 +158,14 @@ See [Developer Guide](docs/developer-guide).
 ## Security
 
 If you find a security vulnerability, please refer our [security policy](SECURITY.md).
+
+## License
+
+Please note that although much of this project is licensed under MPL 2.0, some files in the `terraform` package are licensed under BUSL 1.1.
+
+For the reasons stated above, the executable forms (release binaries) is bound by both licenses.
+
+See also https://discuss.hashicorp.com/t/hashicorp-projects-changing-license-to-business-source-license-v1-1/57106/7
 
 ## Stargazers over time
 

@@ -84,10 +84,10 @@ func NewModuleRunners(parent *Runner) ([]*Runner, error) {
 	for name, cfg := range parent.TFConfig.Children {
 		moduleCall, ok := parent.TFConfig.Module.ModuleCalls[name]
 		if !ok {
-			panic(fmt.Errorf("Expected module call `%s` is not found in `%s`", name, parent.TFConfig.Path.String()))
+			panic(fmt.Errorf(`Expected module call "%s" is not found in %s`, name, parent.TFConfig.Path.String()))
 		}
 		if parent.TFConfig.Path.IsRoot() && parent.config.IgnoreModules[moduleCall.SourceAddrRaw] {
-			log.Printf("[INFO] Ignore `%s` module", moduleCall.Name)
+			log.Printf(`[INFO] Ignore "%s" module`, moduleCall.Name)
 			continue
 		}
 
@@ -215,9 +215,7 @@ func (r *Runner) File(path string) *hcl.File {
 func (r *Runner) Files() map[string]*hcl.File {
 	result := make(map[string]*hcl.File)
 	for name, file := range r.TFConfig.Module.Files {
-		if filepath.Dir(name) == filepath.Clean(r.TFConfig.Module.SourceDir) {
-			result[name] = file
-		}
+		result[name] = file
 	}
 	return result
 }
@@ -240,14 +238,14 @@ func (r *Runner) EmitIssue(rule Rule, message string, location hcl.Range, fixabl
 		})
 	} else {
 		modVars := r.listModuleVars(r.currentExpr)
-		// Returns true only if all issues have not been ignored in module inspection.
+		// Returns true only if all issues have not been ignored in called modules.
 		allApplied := len(modVars) > 0
 		for _, modVar := range modVars {
 			applied := r.emitIssue(&Issue{
 				Rule:    rule,
 				Message: message,
 				Range:   modVar.DeclRange,
-				Fixable: false, // Issues for module inspection are always not fixable.
+				Fixable: false, // Issues are always not fixable in called modules.
 				Callers: append(modVar.callers(), location),
 				Source:  r.Sources()[modVar.DeclRange.Filename],
 			})
@@ -321,14 +319,18 @@ func (r *Runner) listModuleVars(expr hcl.Expression) []*moduleVariable {
 	return ret
 }
 
+// listVarRefs returns the references in the expression.
+// If the expression is not a valid expression, it returns an empty map.
 func listVarRefs(expr hcl.Expression) map[string]addrs.InputVariable {
+	ret := map[string]addrs.InputVariable{}
 	refs, diags := lang.ReferencesInExpr(expr)
+
 	if diags.HasErrors() {
-		// Maybe this is bug
-		panic(diags)
+		// If we cannot determine the references in the expression, it is likely a valid HCL expression, but not a valid Terraform expression.
+		// The declaration range of a block with no labels is its name, which is syntactically valid as an HCL expression, but is not a valid Terraform reference.
+		return ret
 	}
 
-	ret := map[string]addrs.InputVariable{}
 	for _, ref := range refs {
 		if varRef, ok := ref.Subject.(addrs.InputVariable); ok {
 			ret[varRef.String()] = varRef

@@ -77,6 +77,7 @@ func (s *GRPCServer) GetFile(name string) (*hcl.File, error) {
 		return file, nil
 	}
 	// If the file is not found in the current module, it may be in other modules (e.g. root module).
+	log.Printf(`[DEBUG] The file "%s" is not found in the current module. Fall back to global caches.`, name)
 	return s.files[name], nil
 }
 
@@ -112,7 +113,7 @@ func (s *GRPCServer) GetRuleConfigContent(name string, bodyS *hclext.BodySchema)
 	body, diags := hclext.Content(configBody, bodyS)
 	if diags.HasErrors() {
 		if enabledByCLI {
-			return nil, s.runner.ConfigSources(), errors.New("This rule cannot be enabled with the `--enable-rule` option because it lacks the required configuration")
+			return nil, s.runner.ConfigSources(), errors.New("This rule cannot be enabled with the --enable-rule option because it lacks the required configuration")
 		}
 		return body, s.runner.ConfigSources(), diags
 	}
@@ -187,9 +188,12 @@ func (s *GRPCServer) EvaluateExpr(expr hcl.Expression, opts sdk.EvaluateExprOpti
 }
 
 // EmitIssue stores an issue in the server based on passed rule, message, and location.
+// It attempts to detect whether the issue range represents an expression and emits it based on that context.
+// However, some ranges may be syntactically valid but not actually represent an expression.
+// In these cases, the "expression" is still provided as context and the client should ignore any errors when attempting to evaluate it.
 func (s *GRPCServer) EmitIssue(rule sdk.Rule, message string, location hcl.Range, fixable bool) (bool, error) {
 	// If the issue range represents an expression, it is emitted based on that context.
-	// This is important for module inspection that emits issues for module arguments included in the expression.
+	// This is required to emit issues in called modules.
 	expr, err := s.getExprFromRange(location)
 	if err != nil {
 		// If the range does not represent an expression, just emit it without context.

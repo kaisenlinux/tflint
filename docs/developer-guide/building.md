@@ -1,6 +1,6 @@
 # Building TFLint
 
-Go 1.21 or higher is required to build TFLint from source code. Clone the source code and run the `make` command. Built binary will be placed in `dist` directory.
+Go 1.22 or higher is required to build TFLint from source code. Clone the source code and run the `make` command. Built binary will be placed in `dist` directory.
 
 ```console
 $ git clone https://github.com/terraform-linters/tflint.git
@@ -16,6 +16,13 @@ If you change code, make sure that the tests you add and existing tests will be 
 
 ```console
 $ make test
+```
+
+Some tests depending on Git submodules. Running `make test` will update these automatically, but if you run tests directly with `go test`, you need to update submodules manually:
+
+```sh
+git submodule init
+git submodule update
 ```
 
 ## Run E2E tests

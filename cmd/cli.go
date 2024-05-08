@@ -6,8 +6,10 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/fatih/color"
 	"github.com/hashicorp/logutils"
@@ -63,6 +65,7 @@ func (cli *CLI) Run(args []string) int {
 		Stdout: cli.outStream,
 		Stderr: cli.errStream,
 		Format: opts.Format,
+		Fix:    opts.Fix,
 	}
 	if opts.Color {
 		color.NoColor = false
@@ -92,6 +95,10 @@ func (cli *CLI) Run(args []string) int {
 		cli.formatter.Print(tflint.Issues{}, fmt.Errorf("Command line arguments support was dropped in v0.47. Use --chdir or --filter instead."), map[string][]byte{})
 		return ExitCodeError
 	}
+	if opts.MaxWorkers != nil && *opts.MaxWorkers <= 0 {
+		cli.formatter.Print(tflint.Issues{}, fmt.Errorf("Max workers should be greater than 0"), map[string][]byte{})
+		return ExitCodeError
+	}
 
 	switch {
 	case opts.Version:
@@ -103,36 +110,37 @@ func (cli *CLI) Run(args []string) int {
 	case opts.ActAsBundledPlugin:
 		return cli.actAsBundledPlugin()
 	default:
-		return cli.inspect(opts)
+		if opts.Recursive {
+			return cli.inspectParallel(opts)
+		} else {
+			return cli.inspect(opts)
+		}
 	}
 }
 
 func unknownOptionHandler(option string, arg flags.SplitArgument, args []string) ([]string, error) {
 	if option == "debug" {
-		return []string{}, errors.New("`debug` option was removed in v0.8.0. Please set `TFLINT_LOG` environment variables instead")
-	}
-	if option == "fast" {
-		return []string{}, errors.New("`fast` option was removed in v0.9.0. The `aws_instance_invalid_ami` rule is already fast enough")
+		return []string{}, errors.New("--debug option was removed in v0.8.0. Please set TFLINT_LOG environment variables instead")
 	}
 	if option == "error-with-issues" {
-		return []string{}, errors.New("`error-with-issues` option was removed in v0.9.0. The behavior is now default")
+		return []string{}, errors.New("--error-with-issues option was removed in v0.9.0. The behavior is now default")
 	}
 	if option == "quiet" || option == "q" {
-		return []string{}, errors.New("`quiet` option was removed in v0.11.0. The behavior is now default")
+		return []string{}, errors.New("--quiet option was removed in v0.11.0. The behavior is now default")
 	}
 	if option == "ignore-rule" {
-		return []string{}, errors.New("`ignore-rule` option was removed in v0.12.0. Please use `--disable-rule` instead")
+		return []string{}, errors.New("--ignore-rule option was removed in v0.12.0. Please use --disable-rule instead")
 	}
 	if option == "deep" {
-		return []string{}, errors.New("`deep` option was removed in v0.23.0. Deep checking is now a feature of the AWS plugin, so please configure the plugin instead")
+		return []string{}, errors.New("--deep option was removed in v0.23.0. Deep checking is now a feature of the AWS plugin, so please configure the plugin instead")
 	}
 	if option == "aws-access-key" || option == "aws-secret-key" || option == "aws-profile" || option == "aws-creds-file" || option == "aws-region" {
-		return []string{}, fmt.Errorf("`%s` option was removed in v0.23.0. AWS rules are provided by the AWS plugin, so please configure the plugin instead", option)
+		return []string{}, fmt.Errorf("--%s option was removed in v0.23.0. AWS rules are provided by the AWS plugin, so please configure the plugin instead", option)
 	}
 	if option == "loglevel" {
-		return []string{}, errors.New("`loglevel` option was removed in v0.40.0. Please set `TFLINT_LOG` environment variables instead")
+		return []string{}, errors.New("--loglevel option was removed in v0.40.0. Please set TFLINT_LOG environment variables instead")
 	}
-	return []string{}, fmt.Errorf("`%s` is unknown option. Please run `tflint --help`", option)
+	return []string{}, fmt.Errorf(`--%s is unknown option. Please run "tflint --help"`, option)
 }
 
 func findWorkingDirs(opts Options) ([]string, error) {
@@ -174,7 +182,7 @@ func findWorkingDirs(opts Options) ([]string, error) {
 }
 
 func (cli *CLI) withinChangedDir(dir string, proc func() error) (err error) {
-	if dir != "." {
+	if dir != "." && dir != "" {
 		chErr := os.Chdir(dir)
 		if chErr != nil {
 			return fmt.Errorf("Failed to switch to a different working directory; %w", chErr)
@@ -188,4 +196,17 @@ func (cli *CLI) withinChangedDir(dir string, proc func() error) (err error) {
 	}
 
 	return proc()
+}
+
+func registerShutdownCh() <-chan os.Signal {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
+	return ch
+}
+
+func (cli *CLI) registerShutdownHandler(callback func()) {
+	ch := registerShutdownCh()
+	sig := <-ch
+	fmt.Fprintf(cli.errStream, "Received %s, shutting down...\n", sig)
+	callback()
 }

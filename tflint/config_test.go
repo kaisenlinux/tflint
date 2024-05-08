@@ -2,6 +2,7 @@ package tflint
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/spf13/afero"
 	"github.com/terraform-linters/tflint-plugin-sdk/hclext"
 	sdk "github.com/terraform-linters/tflint-plugin-sdk/tflint"
+	"github.com/terraform-linters/tflint/terraform"
 )
 
 func TestLoadConfig(t *testing.T) {
@@ -22,6 +24,7 @@ func TestLoadConfig(t *testing.T) {
 		name     string
 		file     string
 		files    map[string]string
+		envs     map[string]string
 		want     *Config
 		errCheck func(error) bool
 	}{
@@ -30,11 +33,15 @@ func TestLoadConfig(t *testing.T) {
 			file: "config.hcl",
 			files: map[string]string{
 				"config.hcl": `
+tflint {
+	required_version = ">= 0"
+}
+
 config {
 	format = "compact"
 	plugin_dir = "~/.tflint.d/plugins"
 
-	module = true
+	call_module_type = "all"
 	force = true
 
 	ignore_module = {
@@ -72,10 +79,10 @@ plugin "baz" {
 }`,
 			},
 			want: &Config{
-				Module:    true,
-				ModuleSet: true,
-				Force:     true,
-				ForceSet:  true,
+				CallModuleType:    terraform.CallAllModule,
+				CallModuleTypeSet: true,
+				Force:             true,
+				ForceSet:          true,
 				IgnoreModules: map[string]bool{
 					"github.com/terraform-linters/example-module": true,
 				},
@@ -131,8 +138,40 @@ plugin "baz" {
 			errCheck: neverHappend,
 		},
 		{
+			name: "TFLINT_CONFIG_FILE",
+			file: "",
+			files: map[string]string{
+				"env.hcl": `
+config {
+	force = true
+	disabled_by_default = true
+}`,
+			},
+			envs: map[string]string{
+				"TFLINT_CONFIG_FILE": "env.hcl",
+			},
+			want: &Config{
+				CallModuleType:       terraform.CallLocalModule,
+				Force:                true,
+				ForceSet:             true,
+				IgnoreModules:        map[string]bool{},
+				Varfiles:             []string{},
+				Variables:            []string{},
+				DisabledByDefault:    true,
+				DisabledByDefaultSet: true,
+				Rules:                map[string]*RuleConfig{},
+				Plugins: map[string]*PluginConfig{
+					"terraform": {
+						Name:    "terraform",
+						Enabled: true,
+					},
+				},
+			},
+			errCheck: neverHappend,
+		},
+		{
 			name: "default home config",
-			file: ".tflint.hcl",
+			file: "",
 			files: map[string]string{
 				"/root/.tflint.hcl": `
 config {
@@ -141,7 +180,7 @@ config {
 }`,
 			},
 			want: &Config{
-				Module:               false,
+				CallModuleType:       terraform.CallLocalModule,
 				Force:                true,
 				ForceSet:             true,
 				IgnoreModules:        map[string]bool{},
@@ -161,7 +200,7 @@ config {
 		},
 		{
 			name:     "no config",
-			file:     ".tflint.hcl",
+			file:     "",
 			want:     EmptyConfig().enableBundledPlugin(),
 			errCheck: neverHappend,
 		},
@@ -175,7 +214,7 @@ plugin "terraform" {
 }`,
 			},
 			want: &Config{
-				Module:            false,
+				CallModuleType:    terraform.CallLocalModule,
 				Force:             false,
 				IgnoreModules:     map[string]bool{},
 				Varfiles:          []string{},
@@ -194,6 +233,16 @@ plugin "terraform" {
 		{
 			name: "file not found",
 			file: "not_found.hcl",
+			errCheck: func(err error) bool {
+				return err == nil || err.Error() != "failed to load file: open not_found.hcl: file does not exist"
+			},
+		},
+		{
+			name: "file not found with TFLINT_CONFIG_FILE",
+			file: "",
+			envs: map[string]string{
+				"TFLINT_CONFIG_FILE": "not_found.hcl",
+			},
 			errCheck: func(err error) bool {
 				return err == nil || err.Error() != "failed to load file: open not_found.hcl: file does not exist"
 			},
@@ -235,6 +284,19 @@ config {
 			},
 		},
 		{
+			name: "invalid call_module_type",
+			file: "invalid_call_module_type.hcl",
+			files: map[string]string{
+				"invalid_call_module_type.hcl": `
+config {
+	call_module_type = "invalid"
+}`,
+			},
+			errCheck: func(err error) bool {
+				return err == nil || err.Error() != "invalid is invalid call module type. Allowed values are: all, local, none"
+			},
+		},
+		{
 			name: "plugin without source",
 			file: "plugin_without_source.hcl",
 			files: map[string]string{
@@ -246,7 +308,7 @@ plugin "foo" {
 }`,
 			},
 			errCheck: func(err error) bool {
-				return err == nil || err.Error() != "plugin `foo`: `source` attribute cannot be omitted when specifying `version`"
+				return err == nil || err.Error() != `plugin "foo": "source" attribute cannot be omitted when specifying "version"`
 			},
 		},
 		{
@@ -261,7 +323,7 @@ plugin "foo" {
 }`,
 			},
 			errCheck: func(err error) bool {
-				return err == nil || err.Error() != "plugin `foo`: `version` attribute cannot be omitted when specifying `source`"
+				return err == nil || err.Error() != `plugin "foo": "version" attribute cannot be omitted when specifying "source"`
 			},
 		},
 		{
@@ -277,7 +339,7 @@ plugin "foo" {
 }`,
 			},
 			errCheck: func(err error) bool {
-				return err == nil || err.Error() != "plugin `foo`: `source` is invalid. Must be a GitHub reference in the format `${host}/${owner}/${repo}`"
+				return err == nil || err.Error() != `plugin "foo": "source" is invalid. Must be a GitHub reference in the format "${host}/${owner}/${repo}"`
 			},
 		},
 		{
@@ -293,7 +355,7 @@ plugin "foo" {
 }`,
 			},
 			want: &Config{
-				Module:            false,
+				CallModuleType:    terraform.CallLocalModule,
 				Force:             false,
 				IgnoreModules:     map[string]bool{},
 				Varfiles:          []string{},
@@ -318,11 +380,121 @@ plugin "foo" {
 			},
 			errCheck: neverHappend,
 		},
+		{
+			name: "prefer the passed file over TFLINT_CONFIG_FILE",
+			file: "cli.hcl",
+			files: map[string]string{
+				"cli.hcl": `
+config {
+	force = true
+	disabled_by_default = false
+}`,
+				"env.hcl": `
+config {
+	force = false
+	disabled_by_default = true
+}`,
+			},
+			envs: map[string]string{
+				"TFLINT_CONFIG_FILE": "env.hcl",
+			},
+			want: &Config{
+				CallModuleType:       terraform.CallLocalModule,
+				Force:                true,
+				ForceSet:             true,
+				IgnoreModules:        map[string]bool{},
+				Varfiles:             []string{},
+				Variables:            []string{},
+				DisabledByDefault:    false,
+				DisabledByDefaultSet: true,
+				Rules:                map[string]*RuleConfig{},
+				Plugins: map[string]*PluginConfig{
+					"terraform": {
+						Name:    "terraform",
+						Enabled: true,
+					},
+				},
+			},
+			errCheck: neverHappend,
+		},
+		{
+			name: "prefer call_module_type over module",
+			file: "config.hcl",
+			files: map[string]string{
+				"config.hcl": `
+config {
+  call_module_type = "none"
+  module           = true
+}`,
+			},
+			want: &Config{
+				CallModuleType:    terraform.CallNoModule,
+				CallModuleTypeSet: true,
+				Force:             false,
+				IgnoreModules:     map[string]bool{},
+				Varfiles:          []string{},
+				Variables:         []string{},
+				DisabledByDefault: false,
+				Rules:             map[string]*RuleConfig{},
+				Plugins: map[string]*PluginConfig{
+					"terraform": {
+						Name:    "terraform",
+						Enabled: true,
+					},
+				},
+			},
+			errCheck: neverHappend,
+		},
+		{
+			name: "valid required_version",
+			file: "config.hcl",
+			files: map[string]string{
+				"config.hcl": `
+tflint {
+  required_version = ">= 0.50"
+}`,
+			},
+			want:     EmptyConfig().enableBundledPlugin(),
+			errCheck: neverHappend,
+		},
+		{
+			name: "invalid required_version",
+			file: "config.hcl",
+			files: map[string]string{
+				"config.hcl": `
+tflint {
+  required_version = "< 0.50"
+}`,
+			},
+			errCheck: func(err error) bool {
+				return err == nil || err.Error() != fmt.Sprintf(`config.hcl:3,22-30: Unsupported TFLint version; This config does not support the currently used TFLint version %s. Please update to another supported version or change the version requirement.`, Version)
+			},
+		},
+		{
+			name: "multiple required_versions",
+			file: "config.hcl",
+			files: map[string]string{
+				"config.hcl": `
+tflint {
+  required_version = ">= 0.50"
+}
+
+tflint {
+  required_version = "< 0.50"
+}`,
+			},
+			errCheck: func(err error) bool {
+				return err == nil || err.Error() != `config.hcl:6,1-7: Multiple "tflint" blocks are not allowed; The "tflint" block is already found in config.hcl:2,1-7, but found the second one.`
+			},
+		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Setenv("HOME", "/root")
+			for k, v := range test.envs {
+				t.Setenv(k, v)
+			}
 			fs := afero.Afero{Fs: afero.NewMemMapFs()}
 			for name, src := range test.files {
 				if err := fs.WriteFile(name, []byte(src), os.ModePerm); err != nil {
@@ -358,10 +530,10 @@ func TestMerge(t *testing.T) {
 	}
 
 	config := &Config{
-		Module:    true,
-		ModuleSet: true,
-		Force:     true,
-		ForceSet:  true,
+		CallModuleType:    terraform.CallAllModule,
+		CallModuleTypeSet: true,
+		Force:             true,
+		ForceSet:          true,
 		IgnoreModules: map[string]bool{
 			"github.com/terraform-linters/example-1": true,
 			"github.com/terraform-linters/example-2": false,
@@ -415,9 +587,10 @@ func TestMerge(t *testing.T) {
 		{
 			name: "override and merge",
 			base: &Config{
-				Module:    true,
-				ModuleSet: true,
-				Force:     false,
+				CallModuleType:    terraform.CallNoModule,
+				CallModuleTypeSet: true,
+				Force:             false,
+				ForceSet:          true,
 				IgnoreModules: map[string]bool{
 					"github.com/terraform-linters/example-1": true,
 					"github.com/terraform-linters/example-2": false,
@@ -454,9 +627,10 @@ func TestMerge(t *testing.T) {
 				},
 			},
 			other: &Config{
-				Module:   false,
-				Force:    true,
-				ForceSet: true,
+				CallModuleType:    terraform.CallAllModule,
+				CallModuleTypeSet: true,
+				Force:             true,
+				ForceSet:          true,
 				IgnoreModules: map[string]bool{
 					"github.com/terraform-linters/example-2": true,
 					"github.com/terraform-linters/example-3": false,
@@ -493,10 +667,10 @@ func TestMerge(t *testing.T) {
 				},
 			},
 			want: &Config{
-				Module:    true,
-				ModuleSet: true,
-				Force:     true,
-				ForceSet:  true,
+				CallModuleType:    terraform.CallAllModule,
+				CallModuleTypeSet: true,
+				Force:             true,
+				ForceSet:          true,
 				IgnoreModules: map[string]bool{
 					"github.com/terraform-linters/example-1": true,
 					"github.com/terraform-linters/example-2": true,
@@ -546,9 +720,9 @@ func TestMerge(t *testing.T) {
 		{
 			name: "CLI --only argument and merge",
 			base: &Config{
-				Module:    true,
-				ModuleSet: true,
-				Force:     false,
+				CallModuleType:    terraform.CallAllModule,
+				CallModuleTypeSet: true,
+				Force:             false,
 				IgnoreModules: map[string]bool{
 					"github.com/terraform-linters/example-1": true,
 					"github.com/terraform-linters/example-2": false,
@@ -580,9 +754,9 @@ func TestMerge(t *testing.T) {
 				},
 			},
 			other: &Config{
-				Module:   false,
-				Force:    true,
-				ForceSet: true,
+				CallModuleType: terraform.CallLocalModule,
+				Force:          true,
+				ForceSet:       true,
 				IgnoreModules: map[string]bool{
 					"github.com/terraform-linters/example-2": true,
 					"github.com/terraform-linters/example-3": false,
@@ -616,10 +790,10 @@ func TestMerge(t *testing.T) {
 				},
 			},
 			want: &Config{
-				Module:    true,
-				ModuleSet: true,
-				Force:     true,
-				ForceSet:  true,
+				CallModuleType:    terraform.CallAllModule,
+				CallModuleTypeSet: true,
+				Force:             true,
+				ForceSet:          true,
 				IgnoreModules: map[string]bool{
 					"github.com/terraform-linters/example-1": true,
 					"github.com/terraform-linters/example-2": true,
@@ -666,7 +840,7 @@ func TestMerge(t *testing.T) {
 		{
 			name: "merge rule config with CLI-based config",
 			base: &Config{
-				Module:            false,
+				CallModuleType:    terraform.CallLocalModule,
 				Force:             false,
 				IgnoreModules:     map[string]bool{},
 				Varfiles:          []string{},
@@ -682,7 +856,7 @@ func TestMerge(t *testing.T) {
 				Plugins: map[string]*PluginConfig{},
 			},
 			other: &Config{
-				Module:            false,
+				CallModuleType:    terraform.CallLocalModule,
 				Force:             false,
 				IgnoreModules:     map[string]bool{},
 				Varfiles:          []string{},
@@ -698,7 +872,7 @@ func TestMerge(t *testing.T) {
 				Plugins: map[string]*PluginConfig{},
 			},
 			want: &Config{
-				Module:            false,
+				CallModuleType:    terraform.CallLocalModule,
 				Force:             false,
 				IgnoreModules:     map[string]bool{},
 				Varfiles:          []string{},
@@ -717,7 +891,7 @@ func TestMerge(t *testing.T) {
 		{
 			name: "merge plugin config with CLI-based config",
 			base: &Config{
-				Module:            false,
+				CallModuleType:    terraform.CallLocalModule,
 				Force:             false,
 				IgnoreModules:     map[string]bool{},
 				Varfiles:          []string{},
@@ -738,7 +912,7 @@ func TestMerge(t *testing.T) {
 				},
 			},
 			other: &Config{
-				Module:            false,
+				CallModuleType:    terraform.CallLocalModule,
 				Force:             false,
 				IgnoreModules:     map[string]bool{},
 				Varfiles:          []string{},
@@ -753,7 +927,7 @@ func TestMerge(t *testing.T) {
 				},
 			},
 			want: &Config{
-				Module:            false,
+				CallModuleType:    terraform.CallLocalModule,
 				Force:             false,
 				IgnoreModules:     map[string]bool{},
 				Varfiles:          []string{},
@@ -965,7 +1139,7 @@ plugin "test" {
 				var exists bool
 				plugin, exists = config.Plugins["test"]
 				if !exists {
-					t.Fatal("plugin `test` should be declared")
+					t.Fatal(`plugin "test" should be declared`)
 				}
 			}
 
@@ -1044,7 +1218,7 @@ func Test_ValidateRules(t *testing.T) {
 			Name:     "duplicate",
 			Config:   config,
 			RuleSets: []RuleSet{&ruleSetA{}, &ruleSetB{}, &ruleSetB{}},
-			Err:      errors.New("`aws_instance_invalid_ami` is duplicated in ruleSetB and ruleSetB"),
+			Err:      errors.New(`"aws_instance_invalid_ami" is duplicated in ruleSetB and ruleSetB`),
 		},
 		{
 			Name:     "not found",

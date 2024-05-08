@@ -23,8 +23,8 @@ After declaring the `version` and `source`, `tflint --init` can automatically in
 
 ```console
 $ tflint --init
-Installing `foo` plugin...
-Installed `foo` (source: github.com/org/tflint-ruleset-foo, version: 0.1.0)
+Installing "foo" plugin...
+Installed "foo" (source: github.com/org/tflint-ruleset-foo, version: 0.1.0)
 $ tflint -v
 TFLint version 0.28.1
 + ruleset.foo (0.1.0)
@@ -73,6 +73,20 @@ If you fetch plugins frequently in CI, you may hit this rate limit. If you run T
 To increase the rate limit, you can send an authenticated request by authenticating your requests with an access token, by setting the `GITHUB_TOKEN` environment variable. In GitHub Actions, you can pass the built-in `GITHUB_TOKEN` that is injected into each job.
 
 It's also a good idea to cache the plugin directory, as TFLint will only send requests if plugins aren't installed. The [setup-tflint action](https://github.com/terraform-linters/setup-tflint#usage) includes an example of caching in GitHub Actions.
+
+If you host your plugins on GitHub Enterprise Server (GHES), you may need to use a different token than on GitHub.com. In this case, you can use a host-specific token like `GITHUB_TOKEN_example_com`. The hostname must be normalized with Punycode. Use "_" instead of "." and "__" instead of "-".
+
+```hcl
+# GITHUB_TOKEN will be used
+plugin "foo" {
+  source = "github.com/org/tflint-ruleset-foo"
+}
+
+# GITHUB_TOKEN_example_com will be used preferentially and will fall back to GITHUB_TOKEN if not set.
+plugin "bar" {
+  source = "example.com/org/tflint-ruleset-bar"
+}
+```
 
 ## Keeping plugins up to date
 

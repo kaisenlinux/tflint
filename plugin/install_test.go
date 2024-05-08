@@ -16,7 +16,7 @@ func Test_Install(t *testing.T) {
 	config := NewInstallConfig(tflint.EmptyConfig(), &tflint.PluginConfig{
 		Name:        "aws",
 		Enabled:     true,
-		Version:     "0.4.0",
+		Version:     "0.29.0",
 		Source:      "github.com/terraform-linters/tflint-ruleset-aws",
 		SourceHost:  "github.com",
 		SourceOwner: "terraform-linters",
@@ -80,6 +80,138 @@ func TestNewGitHubClient(t *testing.T) {
 
 			if client.BaseURL.String() != tc.expected {
 				t.Fatalf("Unexpected API URL: want %s, got %s", tc.expected, client.BaseURL.String())
+			}
+		})
+	}
+}
+
+func TestGetGitHubToken(t *testing.T) {
+	tests := []struct {
+		name   string
+		config *InstallConfig
+		envs   map[string]string
+		want   string
+	}{
+		{
+			name: "no token",
+			config: &InstallConfig{
+				PluginConfig: &tflint.PluginConfig{
+					SourceHost: "github.com",
+				},
+			},
+			want: "",
+		},
+		{
+			name: "GITHUB_TOKEN",
+			config: &InstallConfig{
+				PluginConfig: &tflint.PluginConfig{
+					SourceHost: "github.com",
+				},
+			},
+			envs: map[string]string{
+				"GITHUB_TOKEN": "github_com_token",
+			},
+			want: "github_com_token",
+		},
+		{
+			name: "GITHUB_TOKEN_example_com",
+			config: &InstallConfig{
+				PluginConfig: &tflint.PluginConfig{
+					SourceHost: "example.com",
+				},
+			},
+			envs: map[string]string{
+				"GITHUB_TOKEN_example_com": "example_com_token",
+			},
+			want: "example_com_token",
+		},
+		{
+			name: "GITHUB_TOKEN and GITHUB_TOKEN_example_com",
+			config: &InstallConfig{
+				PluginConfig: &tflint.PluginConfig{
+					SourceHost: "example.com",
+				},
+			},
+			envs: map[string]string{
+				"GITHUB_TOKEN":             "github_com_token",
+				"GITHUB_TOKEN_example_com": "example_com_token",
+			},
+			want: "example_com_token",
+		},
+		{
+			name: "GITHUB_TOKEN_example_com and GITHUB_TOKEN_example_org",
+			config: &InstallConfig{
+				PluginConfig: &tflint.PluginConfig{
+					SourceHost: "example.com",
+				},
+			},
+			envs: map[string]string{
+				"GITHUB_TOKEN_example_com": "example_com_token",
+				"GITHUB_TOKEN_example_org": "example_org_token",
+			},
+			want: "example_com_token",
+		},
+		{
+			name: "GITHUB_TOKEN_{source_host} found, but source host is not matched",
+			config: &InstallConfig{
+				PluginConfig: &tflint.PluginConfig{
+					SourceHost: "example.org",
+				},
+			},
+			envs: map[string]string{
+				"GITHUB_TOKEN_example_com": "example_com_token",
+			},
+			want: "",
+		},
+		{
+			name: "GITHUB_TOKEN_{source_host} and GITHUB_TOKEN found, but source host is not matched",
+			config: &InstallConfig{
+				PluginConfig: &tflint.PluginConfig{
+					SourceHost: "example.org",
+				},
+			},
+			envs: map[string]string{
+				"GITHUB_TOKEN_example_com": "example_com_token",
+				"GITHUB_TOKEN":             "github_com_token",
+			},
+			want: "github_com_token",
+		},
+		{
+			name: "GITHUB_TOKEN_xn--lhr645fjve.jp",
+			config: &InstallConfig{
+				PluginConfig: &tflint.PluginConfig{
+					SourceHost: "総務省.jp",
+				},
+			},
+			envs: map[string]string{
+				"GITHUB_TOKEN_xn--lhr645fjve.jp": "mic_jp_token",
+			},
+			want: "mic_jp_token",
+		},
+		{
+			name: "GITHUB_TOKEN_xn____lhr645fjve_jp",
+			config: &InstallConfig{
+				PluginConfig: &tflint.PluginConfig{
+					SourceHost: "総務省.jp",
+				},
+			},
+			envs: map[string]string{
+				"GITHUB_TOKEN_xn____lhr645fjve_jp": "mic_jp_token",
+			},
+			want: "mic_jp_token",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("GITHUB_TOKEN", "")
+			for k, v := range test.envs {
+				t.Setenv(k, v)
+			}
+
+			got := test.config.getGitHubToken()
+			if got != test.want {
+				t.Errorf("got %q, want %q", got, test.want)
 			}
 		})
 	}

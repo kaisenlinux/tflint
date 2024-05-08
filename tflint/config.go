@@ -3,8 +3,10 @@ package tflint
 import (
 	"fmt"
 	"log"
+	"os"
 	"strings"
 
+	"github.com/hashicorp/go-version"
 	hcl "github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/gohcl"
 	"github.com/hashicorp/hcl/v2/hclparse"
@@ -13,6 +15,7 @@ import (
 	"github.com/spf13/afero"
 	"github.com/terraform-linters/tflint-plugin-sdk/hclext"
 	sdk "github.com/terraform-linters/tflint-plugin-sdk/tflint"
+	"github.com/terraform-linters/tflint/terraform"
 )
 
 var defaultConfigFile = ".tflint.hcl"
@@ -20,6 +23,9 @@ var fallbackConfigFile = "~/.tflint.hcl"
 
 var configSchema = &hcl.BodySchema{
 	Blocks: []hcl.BlockHeaderSchema{
+		{
+			Type: "tflint",
+		},
 		{
 			Type: "config",
 		},
@@ -37,6 +43,7 @@ var configSchema = &hcl.BodySchema{
 var innerConfigSchema = &hcl.BodySchema{
 	Attributes: []hcl.AttributeSchema{
 		{Name: "module"},
+		{Name: "call_module_type"},
 		{Name: "force"},
 		{Name: "ignore_module"},
 		{Name: "varfile"},
@@ -58,8 +65,8 @@ var validFormats = []string{
 
 // Config describes the behavior of TFLint
 type Config struct {
-	Module    bool
-	ModuleSet bool
+	CallModuleType    terraform.CallModuleType
+	CallModuleTypeSet bool
 
 	Force    bool
 	ForceSet bool
@@ -110,7 +117,7 @@ type PluginConfig struct {
 // It is mainly used for testing
 func EmptyConfig() *Config {
 	return &Config{
-		Module:            false,
+		CallModuleType:    terraform.CallLocalModule,
 		Force:             false,
 		IgnoreModules:     map[string]bool{},
 		Varfiles:          []string{},
@@ -124,34 +131,62 @@ func EmptyConfig() *Config {
 // LoadConfig loads TFLint config file.
 // The priority of the configuration files is as follows:
 //
-// 1. current directory (./.tflint.hcl)
-// 2. home directory (~/.tflint.hcl)
+// 1. file passed by the --config option
+// 2. file set by the TFLINT_CONFIG_FILE environment variable
+// 3. current directory (./.tflint.hcl)
+// 4. home directory (~/.tflint.hcl)
 //
-// If neither file exists, an empty config is returned.
-// You can also load any file name. However, there is no fallback
-// to the home directory in this case.
+// For 1 and 2, if the file does not exist, an error will be returned immediately.
+// If 3 fails, fallback to 4, and If it fails, an empty configuration is returned.
 //
 // It also automatically enables bundled plugin if the "terraform"
 // plugin block is not explicitly declared.
 func LoadConfig(fs afero.Afero, file string) (*Config, error) {
-	log.Printf("[INFO] Load config: %s", file)
-	if f, err := fs.Open(file); err == nil {
+	// Load the file passed by the --config option
+	if file != "" {
+		log.Printf("[INFO] Load config: %s", file)
+		f, err := fs.Open(file)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load file: %w", err)
+		}
 		cfg, err := loadConfig(f)
 		if err != nil {
 			return nil, err
 		}
 		return cfg.enableBundledPlugin(), nil
-	} else if file != defaultConfigFile {
-		return nil, fmt.Errorf("failed to load file: %w", err)
-	} else {
-		log.Printf("[INFO] file not found")
 	}
 
+	// Load the file set by the environment variable
+	envFile := os.Getenv("TFLINT_CONFIG_FILE")
+	if envFile != "" {
+		log.Printf("[INFO] Found TFLINT_CONFIG_FILE. Load config: %s", envFile)
+		f, err := fs.Open(envFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load file: %w", err)
+		}
+		cfg, err := loadConfig(f)
+		if err != nil {
+			return nil, err
+		}
+		return cfg.enableBundledPlugin(), nil
+	}
+
+	// Load the default config file
+	log.Printf("[INFO] Load config: %s", defaultConfigFile)
+	if f, err := fs.Open(defaultConfigFile); err == nil {
+		cfg, err := loadConfig(f)
+		if err != nil {
+			return nil, err
+		}
+		return cfg.enableBundledPlugin(), nil
+	}
+	log.Printf("[INFO] file not found")
+
+	// Load the fallback config file
 	fallback, err := homedir.Expand(fallbackConfigFile)
 	if err != nil {
 		return nil, err
 	}
-
 	log.Printf("[INFO] Load config: %s", fallback)
 	if f, err := fs.Open(fallback); err == nil {
 		cfg, err := loadConfig(f)
@@ -162,6 +197,7 @@ func LoadConfig(fs afero.Afero, file string) (*Config, error) {
 	}
 	log.Printf("[INFO] file not found")
 
+	// Use the default config
 	log.Print("[INFO] Use default config")
 	return EmptyConfig().enableBundledPlugin(), nil
 }
@@ -178,6 +214,10 @@ func loadConfig(file afero.File) (*Config, error) {
 		return nil, diags
 	}
 
+	if diags := checkVersionRequirement(f.Body); diags.HasErrors() {
+		return nil, diags
+	}
+
 	content, diags := f.Body.Content(configSchema)
 	if diags.HasErrors() {
 		return nil, diags
@@ -187,6 +227,9 @@ func loadConfig(file afero.File) (*Config, error) {
 	config.sources = parser.Sources()
 	for _, block := range content.Blocks {
 		switch block.Type {
+		case "tflint":
+			// The "tflint" block is already handled by checkVersionRequirement and is therefore ignored
+
 		case "config":
 			inner, diags := block.Body.Content(innerConfigSchema)
 			if diags.HasErrors() {
@@ -195,38 +238,69 @@ func loadConfig(file afero.File) (*Config, error) {
 
 			for name, attr := range inner.Attributes {
 				switch name {
-				case "module":
-					config.ModuleSet = true
-					if err := gohcl.DecodeExpression(attr.Expr, nil, &config.Module); err != nil {
+				case "call_module_type":
+					var callModuleType string
+					config.CallModuleTypeSet = true
+					if err := gohcl.DecodeExpression(attr.Expr, nil, &callModuleType); err != nil {
 						return config, err
 					}
+					config.CallModuleType, err = terraform.AsCallModuleType(callModuleType)
+					if err != nil {
+						return config, err
+					}
+
+				// "module" attribute is deprecated. Use "call_module_type" instead.
+				// This is for backward compatibility.
+				case "module":
+					fmt.Fprintf(os.Stderr, "WARNING: \"module\" attribute in %s is deprecated. Use \"call_module_type\" instead.\n", file.Name())
+					if config.CallModuleTypeSet {
+						// If "call_module_type" is set, ignore "module" attribute
+						continue
+					}
+					var module bool
+					config.CallModuleTypeSet = true
+					if err := gohcl.DecodeExpression(attr.Expr, nil, &module); err != nil {
+						return config, err
+					}
+					if module {
+						config.CallModuleType = terraform.CallAllModule
+					} else {
+						config.CallModuleType = terraform.CallNoModule
+					}
+
 				case "force":
 					config.ForceSet = true
 					if err := gohcl.DecodeExpression(attr.Expr, nil, &config.Force); err != nil {
 						return config, err
 					}
+
 				case "ignore_module":
 					if err := gohcl.DecodeExpression(attr.Expr, nil, &config.IgnoreModules); err != nil {
 						return config, err
 					}
+
 				case "varfile":
 					if err := gohcl.DecodeExpression(attr.Expr, nil, &config.Varfiles); err != nil {
 						return config, err
 					}
+
 				case "variables":
 					if err := gohcl.DecodeExpression(attr.Expr, nil, &config.Variables); err != nil {
 						return config, err
 					}
+
 				case "disabled_by_default":
 					config.DisabledByDefaultSet = true
 					if err := gohcl.DecodeExpression(attr.Expr, nil, &config.DisabledByDefault); err != nil {
 						return config, err
 					}
+
 				case "plugin_dir":
 					config.PluginDirSet = true
 					if err := gohcl.DecodeExpression(attr.Expr, nil, &config.PluginDir); err != nil {
 						return config, err
 					}
+
 				case "format":
 					config.FormatSet = true
 					if err := gohcl.DecodeExpression(attr.Expr, nil, &config.Format); err != nil {
@@ -242,16 +316,19 @@ func loadConfig(file afero.File) (*Config, error) {
 					if !formatValid {
 						return config, fmt.Errorf("%s is invalid format. Allowed formats are: %s", config.Format, strings.Join(validFormats, ", "))
 					}
+
 				default:
 					panic("never happened")
 				}
 			}
+
 		case "rule":
 			ruleConfig := &RuleConfig{Name: block.Labels[0]}
 			if err := gohcl.DecodeBody(block.Body, nil, ruleConfig); err != nil {
 				return config, err
 			}
 			config.Rules[block.Labels[0]] = ruleConfig
+
 		case "plugin":
 			pluginConfig := &PluginConfig{Name: block.Labels[0]}
 			if err := gohcl.DecodeBody(block.Body, nil, pluginConfig); err != nil {
@@ -261,14 +338,15 @@ func loadConfig(file afero.File) (*Config, error) {
 				return config, err
 			}
 			config.Plugins[block.Labels[0]] = pluginConfig
+
 		default:
 			panic("never happened")
 		}
 	}
 
 	log.Printf("[DEBUG] Config loaded")
-	log.Printf("[DEBUG]   Module: %t", config.Module)
-	log.Printf("[DEBUG]   ModuleSet: %t", config.ModuleSet)
+	log.Printf("[DEBUG]   CallModuleType: %s", config.CallModuleType)
+	log.Printf("[DEBUG]   CallModuleTypeSet: %t", config.CallModuleTypeSet)
 	log.Printf("[DEBUG]   Force: %t", config.Force)
 	log.Printf("[DEBUG]   ForceSet: %t", config.ForceSet)
 	log.Printf("[DEBUG]   DisabledByDefault: %t", config.DisabledByDefault)
@@ -296,6 +374,84 @@ func loadConfig(file afero.File) (*Config, error) {
 	return config, nil
 }
 
+// checkVersionRequirement checks whether the TFLint version satisfy the "required_version".
+// At the time of this check, we do not know if other schema meet our requirements,
+// so we only extract the minimal schema. Note that it therefore needs to be independent of loadConfig.
+func checkVersionRequirement(body hcl.Body) hcl.Diagnostics {
+	content, _, diags := body.PartialContent(&hcl.BodySchema{
+		Blocks: []hcl.BlockHeaderSchema{
+			{Type: "tflint"},
+		},
+	})
+	if diags.HasErrors() {
+		return diags
+	}
+
+	if len(content.Blocks) == 0 {
+		return nil
+	}
+	if len(content.Blocks) > 1 {
+		return hcl.Diagnostics{
+			{
+				Severity: hcl.DiagError,
+				Summary:  `Multiple "tflint" blocks are not allowed`,
+				Detail:   fmt.Sprintf(`The "tflint" block is already found in %s, but found the second one.`, content.Blocks[0].DefRange),
+				Subject:  content.Blocks[1].DefRange.Ptr(),
+			},
+		}
+	}
+	block := content.Blocks[0]
+
+	inner, _, diags := block.Body.PartialContent(&hcl.BodySchema{
+		Attributes: []hcl.AttributeSchema{
+			{Name: "required_version"},
+		},
+	})
+	if diags.HasErrors() {
+		return diags
+	}
+
+	versionAttr, exists := inner.Attributes["required_version"]
+	if !exists {
+		return nil
+	}
+	var requiredVersion string
+	if err := gohcl.DecodeExpression(versionAttr.Expr, nil, &requiredVersion); err != nil {
+		return hcl.Diagnostics{
+			{
+				Severity: hcl.DiagError,
+				Summary:  `Failed to decode "required_version" attribute`,
+				Detail:   err.Error(),
+				Subject:  versionAttr.Expr.Range().Ptr(),
+			},
+		}
+	}
+	constraints, err := version.NewConstraint(requiredVersion)
+	if err != nil {
+		return hcl.Diagnostics{
+			{
+				Severity: hcl.DiagError,
+				Summary:  `Failed to parse "required_version" attribute`,
+				Detail:   err.Error(),
+				Subject:  versionAttr.Expr.Range().Ptr(),
+			},
+		}
+	}
+
+	if !constraints.Check(Version) {
+		return hcl.Diagnostics{
+			{
+				Severity: hcl.DiagError,
+				Summary:  "Unsupported TFLint version",
+				Detail:   fmt.Sprintf(`This config does not support the currently used TFLint version %s. Please update to another supported version or change the version requirement.`, Version),
+				Subject:  versionAttr.Expr.Range().Ptr(),
+			},
+		}
+	}
+
+	return nil
+}
+
 // Enable the "recommended" preset if the bundled plugin is automatically enabled.
 var bundledPluginConfigFilename = "__bundled_plugin_config.hcl"
 var bundledPluginConfigContent = `
@@ -317,7 +473,7 @@ func (c *Config) enableBundledPlugin() *Config {
 	}
 
 	if _, exists := c.Plugins["terraform"]; !exists {
-		log.Print("[INFO] The `terraform` plugin block is not found. Enable the plugin `terraform` automatically")
+		log.Print(`[INFO] The "terraform" plugin block is not found. Enable the plugin "terraform" automatically`)
 
 		c.Plugins["terraform"] = &PluginConfig{
 			Name:    "terraform",
@@ -350,9 +506,9 @@ func (c *Config) Sources() map[string][]byte {
 // Merge merges the two configs and applies to itself.
 // Since the argument takes precedence, it can be used as overwriting of the config.
 func (c *Config) Merge(other *Config) {
-	if other.ModuleSet {
-		c.ModuleSet = true
-		c.Module = other.Module
+	if other.CallModuleTypeSet {
+		c.CallModuleTypeSet = true
+		c.CallModuleType = other.CallModuleType
 	}
 	if other.ForceSet {
 		c.ForceSet = true
@@ -450,7 +606,7 @@ func (c *Config) ValidateRules(rulesets ...RuleSet) error {
 
 		for _, rule := range ruleNames {
 			if existsName, exists := rulesMap[rule]; exists {
-				return fmt.Errorf("`%s` is duplicated in %s and %s", rule, existsName, rulesetName)
+				return fmt.Errorf(`"%s" is duplicated in %s and %s`, rule, existsName, rulesetName)
 			}
 			rulesMap[rule] = rulesetName
 		}
@@ -467,18 +623,18 @@ func (c *Config) ValidateRules(rulesets ...RuleSet) error {
 
 func (c *PluginConfig) validate() error {
 	if c.Version != "" && c.Source == "" {
-		return fmt.Errorf("plugin `%s`: `source` attribute cannot be omitted when specifying `version`", c.Name)
+		return fmt.Errorf(`plugin "%s": "source" attribute cannot be omitted when specifying "version"`, c.Name)
 	}
 
 	if c.Source != "" {
 		if c.Version == "" {
-			return fmt.Errorf("plugin `%s`: `version` attribute cannot be omitted when specifying `source`", c.Name)
+			return fmt.Errorf(`plugin "%s": "version" attribute cannot be omitted when specifying "source"`, c.Name)
 		}
 
 		parts := strings.Split(c.Source, "/")
 		// Expected `github.com/owner/repo` format
 		if len(parts) != 3 {
-			return fmt.Errorf("plugin `%s`: `source` is invalid. Must be a GitHub reference in the format `${host}/${owner}/${repo}`", c.Name)
+			return fmt.Errorf(`plugin "%s": "source" is invalid. Must be a GitHub reference in the format "${host}/${owner}/${repo}"`, c.Name)
 		}
 
 		c.SourceHost = parts[0]
