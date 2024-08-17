@@ -1,3 +1,12 @@
+tflint (0.52.0-1kaisen) kaisen-packages; urgency=medium
+
+  * Import the 0.52.0 release
+  * Bump the Standards-Version
+  * Bump the golang-go version required to build
+  * Drop the i386 arch
+
+ -- Kevin Chevreuil - Kaisen <kaisen@kaisenlinux.org>  Sat, 17 Aug 2024 18:49:34 +0200
+
 tflint (0.51.0-1kaisen) kaisen-packages; urgency=medium
 
   * Import the 0.51.0 release
