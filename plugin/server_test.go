@@ -457,6 +457,11 @@ variable "sensitive" {
 	default   = "foo"
 }
 
+variable "ephemeral" {
+	ephemeral = true
+	default   = "foo"
+}
+
 variable "no_default" {}
 
 variable "null" {
@@ -471,7 +476,7 @@ variable "foo" {
 
 	server := NewGRPCServer(runner, rootRunner, runner.Files(), SDKVersion)
 
-	sdkv15 := version.Must(version.NewVersion("0.15.0"))
+	sdkv21 := version.Must(version.NewVersion("0.21.0"))
 
 	// test util functions
 	hclExpr := func(expr string) hcl.Expression {
@@ -520,27 +525,13 @@ variable "foo" {
 			ErrCheck: neverHappend,
 		},
 		{
-			Name: "sensitive value (SDK v0.15)",
+			Name: "sensitive value (SDK v0.21)",
 			Args: func() (hcl.Expression, sdk.EvaluateExprOption) {
 				return hclExpr(`var.sensitive`), sdk.EvaluateExprOption{WantType: &cty.String, ModuleCtx: sdk.SelfModuleCtxType}
 			},
-			Want:       cty.NullVal(cty.NilType),
-			SDKVersion: sdkv15,
-			ErrCheck: func(err error) bool {
-				return err == nil || !errors.Is(err, sdk.ErrSensitive)
-			},
-		},
-		{
-			Name: "sensitive value in object (SDK v0.15)",
-			Args: func() (hcl.Expression, sdk.EvaluateExprOption) {
-				ty := cty.Object(map[string]cty.Type{"value": cty.String})
-				return hclExpr(`{ value = var.sensitive }`), sdk.EvaluateExprOption{WantType: &ty, ModuleCtx: sdk.SelfModuleCtxType}
-			},
-			Want:       cty.NullVal(cty.NilType),
-			SDKVersion: sdkv15,
-			ErrCheck: func(err error) bool {
-				return err == nil || !errors.Is(err, sdk.ErrSensitive)
-			},
+			Want:       cty.StringVal("foo").Mark(marks.Sensitive),
+			SDKVersion: sdkv21,
+			ErrCheck:   neverHappend,
 		},
 		{
 			Name: "no default",
@@ -551,38 +542,6 @@ variable "foo" {
 			ErrCheck: neverHappend,
 		},
 		{
-			Name: "no default (SDK v0.15)",
-			Args: func() (hcl.Expression, sdk.EvaluateExprOption) {
-				return hclExpr(`var.no_default`), sdk.EvaluateExprOption{WantType: &cty.String, ModuleCtx: sdk.SelfModuleCtxType}
-			},
-			SDKVersion: sdkv15,
-			Want:       cty.NullVal(cty.NilType),
-			ErrCheck: func(err error) bool {
-				return err == nil || !errors.Is(err, sdk.ErrUnknownValue)
-			},
-		},
-		{
-			Name: "no default as cty.Value (SDK v0.15)",
-			Args: func() (hcl.Expression, sdk.EvaluateExprOption) {
-				return hclExpr(`var.no_default`), sdk.EvaluateExprOption{WantType: &cty.DynamicPseudoType, ModuleCtx: sdk.SelfModuleCtxType}
-			},
-			SDKVersion: sdkv15,
-			Want:       cty.DynamicVal,
-			ErrCheck:   neverHappend,
-		},
-		{
-			Name: "no default value in object (SDK v0.15)",
-			Args: func() (hcl.Expression, sdk.EvaluateExprOption) {
-				ty := cty.Object(map[string]cty.Type{"value": cty.String})
-				return hclExpr(`{ value = var.no_default }`), sdk.EvaluateExprOption{WantType: &ty, ModuleCtx: sdk.SelfModuleCtxType}
-			},
-			SDKVersion: sdkv15,
-			Want:       cty.NullVal(cty.NilType),
-			ErrCheck: func(err error) bool {
-				return err == nil || !errors.Is(err, sdk.ErrUnknownValue)
-			},
-		},
-		{
 			Name: "null",
 			Args: func() (hcl.Expression, sdk.EvaluateExprOption) {
 				return hclExpr(`var.null`), sdk.EvaluateExprOption{WantType: &cty.String, ModuleCtx: sdk.SelfModuleCtxType}
@@ -591,35 +550,34 @@ variable "foo" {
 			ErrCheck: neverHappend,
 		},
 		{
-			Name: "null (SDK v0.15)",
+			Name: "ephemeral value",
 			Args: func() (hcl.Expression, sdk.EvaluateExprOption) {
-				return hclExpr(`var.null`), sdk.EvaluateExprOption{WantType: &cty.String, ModuleCtx: sdk.SelfModuleCtxType}
+				return hclExpr(`var.ephemeral`), sdk.EvaluateExprOption{WantType: &cty.String, ModuleCtx: sdk.SelfModuleCtxType}
 			},
-			SDKVersion: sdkv15,
+			Want:     cty.StringVal("foo").Mark(marks.Ephemeral),
+			ErrCheck: neverHappend,
+		},
+		{
+			Name: "ephemeral value (SDK v0.21)",
+			Args: func() (hcl.Expression, sdk.EvaluateExprOption) {
+				return hclExpr(`var.ephemeral`), sdk.EvaluateExprOption{WantType: &cty.String, ModuleCtx: sdk.SelfModuleCtxType}
+			},
 			Want:       cty.NullVal(cty.NilType),
+			SDKVersion: sdkv21,
 			ErrCheck: func(err error) bool {
-				return err == nil || !errors.Is(err, sdk.ErrNullValue)
+				return err == nil || !errors.Is(err, sdk.ErrSensitive)
 			},
 		},
 		{
-			Name: "null as cty.Value (SDK v0.15)",
-			Args: func() (hcl.Expression, sdk.EvaluateExprOption) {
-				return hclExpr(`var.null`), sdk.EvaluateExprOption{WantType: &cty.DynamicPseudoType, ModuleCtx: sdk.SelfModuleCtxType}
-			},
-			SDKVersion: sdkv15,
-			Want:       cty.NullVal(cty.String),
-			ErrCheck:   neverHappend,
-		},
-		{
-			Name: "null value in object (SDK v0.15)",
+			Name: "ephemeral value in object (SDK v0.21)",
 			Args: func() (hcl.Expression, sdk.EvaluateExprOption) {
 				ty := cty.Object(map[string]cty.Type{"value": cty.String})
-				return hclExpr(`{ value = var.null }`), sdk.EvaluateExprOption{WantType: &ty, ModuleCtx: sdk.SelfModuleCtxType}
+				return hclExpr(`{ value = var.ephemeral }`), sdk.EvaluateExprOption{WantType: &ty, ModuleCtx: sdk.SelfModuleCtxType}
 			},
 			Want:       cty.NullVal(cty.NilType),
-			SDKVersion: sdkv15,
+			SDKVersion: sdkv21,
 			ErrCheck: func(err error) bool {
-				return err == nil || !errors.Is(err, sdk.ErrNullValue)
+				return err == nil || !errors.Is(err, sdk.ErrSensitive)
 			},
 		},
 	}
@@ -768,7 +726,7 @@ resource "aws_instance" "foo" {
 
 			got := server.GetFiles(sdk.SelfModuleCtxType)
 			if diff := cmp.Diff(test.want, got); diff != "" {
-				t.Errorf(diff)
+				t.Errorf("diff: %s", diff)
 			}
 		})
 	}

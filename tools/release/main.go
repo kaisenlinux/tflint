@@ -12,7 +12,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/google/go-github/v53/github"
+	"github.com/google/go-github/v67/github"
 	"github.com/hashicorp/go-version"
 	"golang.org/x/oauth2"
 )
@@ -60,7 +60,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	log.Println("commiting and tagging...")
+	log.Println("committing and tagging...")
 	if err := execCommand(os.Stdout, "git", "add", "."); err != nil {
 		log.Fatal(err)
 	}

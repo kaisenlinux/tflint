@@ -1,5 +1,5 @@
 // Copyright (c) HashiCorp, Inc.
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: BUSL-1.1
 
 package funcs
 
@@ -12,7 +12,7 @@ import (
 	"github.com/zclconf/go-cty/cty/gocty"
 )
 
-// LogFunc contructs a function that returns the logarithm of a given number in a given base.
+// LogFunc constructs a function that returns the logarithm of a given number in a given base.
 var LogFunc = function.New(&function.Spec{
 	Params: []function.Parameter{
 		{
@@ -41,7 +41,7 @@ var LogFunc = function.New(&function.Spec{
 	},
 })
 
-// PowFunc contructs a function that returns the logarithm of a given number in a given base.
+// PowFunc constructs a function that returns the logarithm of a given number in a given base.
 var PowFunc = function.New(&function.Spec{
 	Params: []function.Parameter{
 		{
@@ -70,7 +70,7 @@ var PowFunc = function.New(&function.Spec{
 	},
 })
 
-// SignumFunc contructs a function that returns the closest whole number greater
+// SignumFunc constructs a function that returns the closest whole number greater
 // than or equal to the given value.
 var SignumFunc = function.New(&function.Spec{
 	Params: []function.Parameter{
@@ -97,18 +97,20 @@ var SignumFunc = function.New(&function.Spec{
 	},
 })
 
-// ParseIntFunc contructs a function that parses a string argument and returns an integer of the specified base.
+// ParseIntFunc constructs a function that parses a string argument and returns an integer of the specified base.
 var ParseIntFunc = function.New(&function.Spec{
 	Params: []function.Parameter{
 		{
-			Name:        "number",
-			Type:        cty.DynamicPseudoType,
-			AllowMarked: true,
+			Name:         "number",
+			Type:         cty.DynamicPseudoType,
+			AllowMarked:  true,
+			AllowUnknown: true,
 		},
 		{
-			Name:        "base",
-			Type:        cty.Number,
-			AllowMarked: true,
+			Name:         "base",
+			Type:         cty.Number,
+			AllowMarked:  true,
+			AllowUnknown: true,
 		},
 	},
 
@@ -126,11 +128,16 @@ var ParseIntFunc = function.New(&function.Spec{
 		var err error
 
 		numArg, numMarks := args[0].Unmark()
+		baseArg, baseMarks := args[1].Unmark()
+
+		if !numArg.IsKnown() || !baseArg.IsKnown() {
+			return cty.UnknownVal(retType).WithMarks(numMarks, baseMarks), nil
+		}
+
 		if err = gocty.FromCtyValue(numArg, &numstr); err != nil {
 			return cty.UnknownVal(cty.String), function.NewArgError(0, err)
 		}
 
-		baseArg, baseMarks := args[1].Unmark()
 		if err = gocty.FromCtyValue(baseArg, &base); err != nil {
 			return cty.UnknownVal(cty.Number), function.NewArgError(1, err)
 		}

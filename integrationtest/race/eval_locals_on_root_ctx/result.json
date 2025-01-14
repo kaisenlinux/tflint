@@ -2,20 +2,20 @@
   "issues": [
     {
       "rule": {
-        "name": "aws_instance_example_type",
+        "name": "aws_route53_record_eval_on_root_ctx_example",
         "severity": "error",
         "link": ""
       },
-      "message": "instance type is t2.micro",
+      "message": "record name (root): \"www.example.com\"",
       "range": {
         "filename": "main.tf",
         "start": {
-          "line": 16,
-          "column": 19
+          "line": 7,
+          "column": 13
         },
         "end": {
-          "line": 16,
-          "column": 36
+          "line": 7,
+          "column": 27
         }
       },
       "callers": []

@@ -171,6 +171,13 @@ variable "string_var" {
 			errCheck: neverHappend,
 		},
 		{
+			name:     "terraform.applying",
+			expr:     expr(`terraform.applying`),
+			ty:       cty.Bool,
+			want:     `cty.False.Mark(marks.Ephemeral)`,
+			errCheck: neverHappend,
+		},
+		{
 			name: "interpolation in string",
 			config: `
 variable "string_var" {
@@ -277,7 +284,7 @@ variable "integer_var" {
 			},
 		},
 		{
-			name:     "no defualt variable",
+			name:     "no default variable",
 			config:   `variable "no_value_var" {}`,
 			expr:     expr(`var.no_value_var`),
 			ty:       cty.String,
@@ -760,6 +767,44 @@ locals {
 			want:     `cty.StringVal("foo")`,
 			errCheck: neverHappend,
 		},
+		{
+			name: "sensitive variable",
+			config: `
+variable "foo" {
+  sensitive = true
+  default   = "bar"
+}`,
+			expr:     expr(`var.foo`),
+			ty:       cty.String,
+			want:     `cty.StringVal("bar").Mark(marks.Sensitive)`,
+			errCheck: neverHappend,
+		},
+		{
+			name: "ephemeral variable",
+			config: `
+variable "foo" {
+  ephemeral = true
+  default   = "bar"
+}`,
+			expr:     expr(`var.foo`),
+			ty:       cty.String,
+			want:     `cty.StringVal("bar").Mark(marks.Ephemeral)`,
+			errCheck: neverHappend,
+		},
+		{
+			name:     "ephemeral resource",
+			expr:     expr(`ephemeral.aws_secretsmanager_secret_version.db_master.secret_string`),
+			ty:       cty.String,
+			want:     `cty.UnknownVal(cty.String).Mark(marks.Ephemeral)`,
+			errCheck: neverHappend,
+		},
+		{
+			name:     "ephemeral resource with ephemeralasnull",
+			expr:     expr(`ephemeralasnull(ephemeral.aws_secretsmanager_secret_version.db_master.secret_string)`),
+			ty:       cty.String,
+			want:     `cty.UnknownVal(cty.String)`,
+			errCheck: neverHappend,
+		},
 	}
 
 	for _, test := range tests {
@@ -788,7 +833,6 @@ locals {
 				ModulePath:     config.Path.UnkeyedInstanceShim(),
 				Config:         config,
 				VariableValues: variableValues,
-				CallStack:      NewCallStack(),
 			}
 			if evaluator.Meta == nil {
 				evaluator.Meta = &ContextMeta{Env: Workspace()}
@@ -2181,7 +2225,6 @@ resource "aws_instance" "main" {
 				ModulePath:     config.Path.UnkeyedInstanceShim(),
 				Config:         config,
 				VariableValues: variableValues,
-				CallStack:      NewCallStack(),
 			}
 
 			expanded, diags := evaluator.ExpandBlock(file.Body, test.schema)
