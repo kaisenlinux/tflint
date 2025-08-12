@@ -1,3 +1,10 @@
+tflint (0.58.0-1kaisen) kaisen-packages; urgency=medium
+
+  * Import the 0.58.0 release
+  * Bump the golang-go version required to build
+
+ -- Kevin Chevreuil - Kaisen <kaisen@kaisenlinux.org>  Sat, 09 Aug 2025 21:28:08 +0200
+
 tflint (0.55.0-1kaisen) kaisen-packages; urgency=medium
 
   * Import the 0.55.0 release

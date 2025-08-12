@@ -50,9 +50,24 @@ func TestIntegration(t *testing.T) {
 			stdout:  "",
 		},
 		{
-			name:    "specify format",
+			name:    "--format option",
 			command: "./tflint --format json",
 			dir:     "no_issues",
+			status:  cmd.ExitCodeOK,
+			stdout:  "[]",
+		},
+		{
+			name:    "format config",
+			command: "./tflint",
+			dir:     "format_config",
+			status:  cmd.ExitCodeOK,
+			stdout: `<?xml version="1.0" encoding="UTF-8"?>
+<checkstyle></checkstyle>`,
+		},
+		{
+			name:    "--format + config",
+			command: "./tflint --format json",
+			dir:     "format_config",
 			status:  cmd.ExitCodeOK,
 			stdout:  "[]",
 		},
@@ -380,6 +395,13 @@ func TestIntegration(t *testing.T) {
 			stdout:  fmt.Sprintf("%s (aws_instance_example_type)", color.New(color.Bold).Sprint("instance type is m5.2xlarge")),
 		},
 		{
+			name:    "--chdir and format config",
+			command: "./tflint --chdir=subdir", // Apply config in subdir
+			dir:     "chdir_format",
+			status:  cmd.ExitCodeOK,
+			stdout:  "[]",
+		},
+		{
 			name:    "invalid max workers",
 			command: "./tflint --max-workers=0",
 			dir:     "no_issues",
@@ -394,16 +416,10 @@ func TestIntegration(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			testDir := filepath.Join(dir, test.dir)
-			defer func() {
-				if err := os.Chdir(dir); err != nil {
-					t.Fatal(err)
-				}
-				// Reset global color option
+			t.Cleanup(func() {
 				color.NoColor = defaultNoColor
-			}()
-			if err := os.Chdir(testDir); err != nil {
-				t.Fatal(err)
-			}
+			})
+			t.Chdir(testDir)
 
 			outStream, errStream := new(bytes.Buffer), new(bytes.Buffer)
 			cli, err := cmd.NewCLI(outStream, errStream)

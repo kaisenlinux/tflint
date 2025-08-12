@@ -1,5 +1,5 @@
 # TFLint
-[![Build Status](https://github.com/terraform-linters/tflint/workflows/build/badge.svg?branch=master)](https://github.com/terraform-linters/tflint/actions)
+[![Build Status](https://github.com/terraform-linters/tflint/actions/workflows/build.yml/badge.svg?branch=master)](https://github.com/terraform-linters/tflint/actions)
 [![GitHub release](https://img.shields.io/github/release/terraform-linters/tflint.svg)](https://github.com/terraform-linters/tflint/releases/latest)
 [![Terraform Compatibility](https://img.shields.io/badge/terraform-%3E%3D%201.0-blue)](docs/user-guide/compatibility.md)
 [![License: MPL 2.0 + BUSL 1.1](https://img.shields.io/badge/License-MPL%202.0%20+%20BUSL%201.1-blue.svg)](#license)
@@ -66,6 +66,12 @@ Instead of installing directly, you can use the Docker image:
 docker run --rm -v $(pwd):/data -t ghcr.io/terraform-linters/tflint
 ```
 
+To download plugins, you can override the entrypoint to a shell (`sh`) to run `--init` and the main command in a single `docker run` command:
+
+```console
+ docker run --rm -v $(pwd):/data -t --entrypoint /bin/sh ghcr.io/terraform-linters/tflint -c "tflint --init && tflint"
+```
+
 ### GitHub Actions
 
 If you want to run on GitHub Actions, [setup-tflint](https://github.com/terraform-linters/setup-tflint) action is available.
@@ -111,6 +117,8 @@ plugin "foo" {
 ```
 
 See also [Configuring Plugins](docs/user-guide/plugins.md).
+
+You can discover plugins from other organizations on GitHub via the [`tflint-ruleset`](https://github.com/topics/tflint-ruleset) topic.
 
 If you want to add custom rules that are not in existing plugins, you can build your own plugin or write your own policy in Rego. See [Writing Plugins](docs/developer-guide/plugins.md) or [OPA Ruleset](https://github.com/terraform-linters/tflint-ruleset-opa).
 

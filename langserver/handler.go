@@ -101,7 +101,7 @@ type handler struct {
 	diagsPaths        []string
 }
 
-func (h *handler) handle(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) (result interface{}, err error) {
+func (h *handler) handle(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) (result any, err error) {
 	if req.Params != nil {
 		params, err := json.Marshal(&req.Params)
 		if err != nil {
@@ -178,9 +178,6 @@ func (h *handler) inspect() (map[string][]lsp.Diagnostic, error) {
 	}
 	annotations := map[string]tflint.Annotations{}
 	for path, file := range files {
-		if !strings.HasSuffix(path, ".tf") {
-			continue
-		}
 		ants, lexDiags := tflint.NewAnnotations(path, file)
 		diags = diags.Extend(lexDiags)
 		annotations[path] = ants
